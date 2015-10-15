@@ -276,38 +276,38 @@ func (ch *authHSChan) calculateProof(clientHostname, serverHostname string) []by
 }
 
 func newServerAuthHSChan(conn *ricochetConn, msg *packet.OpenChannel) (*authHSChan, error) {
-	authCh := new(authHSChan)
-	authCh.conn = conn
-	authCh.chanID = (uint16)(msg.GetChannelIdentifier())
+	ch := new(authHSChan)
+	ch.conn = conn
+	ch.chanID = (uint16)(msg.GetChannelIdentifier())
 
 	ext, err := proto.GetExtension(msg, packet.E_ClientCookie)
 	if err != nil {
 		return nil, err
 	}
-	authCh.clientCookie = ext.([]byte)
-	if len(authCh.clientCookie) != authHiddenServiceCookieSize {
+	ch.clientCookie = ext.([]byte)
+	if len(ch.clientCookie) != authHiddenServiceCookieSize {
 		return nil, fmt.Errorf("invalid AuthHiddenService client_cookie")
 	}
-	return authCh, nil
+	return ch, nil
 }
 
 func newClientAuthHSChan(conn *ricochetConn) (err error) {
-	authCh := new(authHSChan)
-	authCh.conn = conn
-	authCh.chanID, err = conn.allocateNextChanID()
+	ch := new(authHSChan)
+	ch.conn = conn
+	ch.chanID, err = conn.allocateNextChanID()
 	if err != nil {
 		return
 	}
 
-	authCh.clientCookie = make([]byte, authHiddenServiceCookieSize)
-	if _, err = rand.Read(authCh.clientCookie); err != nil {
+	ch.clientCookie = make([]byte, authHiddenServiceCookieSize)
+	if _, err = rand.Read(ch.clientCookie); err != nil {
 		return err
 	}
 	openChan := &packet.OpenChannel{
-		ChannelIdentifier: proto.Int32((int32)(authCh.chanID)),
+		ChannelIdentifier: proto.Int32((int32)(ch.chanID)),
 		ChannelType:       proto.String(authHiddenServiceChannelType),
 	}
-	if err = proto.SetExtension(openChan, packet.E_ClientCookie, authCh.clientCookie); err != nil {
+	if err = proto.SetExtension(openChan, packet.E_ClientCookie, ch.clientCookie); err != nil {
 		return
 	}
 	ctrlPkt := &packet.ControlPacket{OpenChannel: openChan}
@@ -319,8 +319,8 @@ func newClientAuthHSChan(conn *ricochetConn) (err error) {
 
 	conn.Lock()
 	defer conn.Unlock()
-	conn.chanMap[authCh.chanID] = authCh
-	conn.getControlChan().authChan = (int)(authCh.chanID)
+	conn.chanMap[ch.chanID] = ch
+	conn.getControlChan().authChan = (int)(ch.chanID)
 
 	return
 }
