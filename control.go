@@ -36,7 +36,8 @@ type controlChan struct {
 	sentEnableFeatures   bool
 	keepAliveOutstanding bool
 
-	authChan int
+	authChan       int
+	contactReqChan int
 }
 
 func (conn *ricochetConn) getControlChan() *controlChan {
@@ -127,6 +128,13 @@ func (ch *controlChan) onOpenChannelMsg(msg *packet.OpenChannel) error {
 		if !ch.isAuthenticated {
 			return fmt.Errorf("attempted to open contact req channel pre-auth")
 		}
+		if ch.contactReqChan != invalidChanID {
+			return fmt.Errorf("attempted to open contact req channel when one exists")
+		}
+		if newCh, err = newServerContactReqChan(ch.conn, msg); err != nil {
+			return err
+		}
+		ch.contactReqChan = (int)(chanID)
 	case chatChannelType:
 		if !ch.isAuthenticated {
 			return fmt.Errorf("attempted to open chat channel pre-auth")
@@ -273,5 +281,6 @@ func newControlChan(conn *ricochetConn, chanID uint16) *controlChan {
 	ch := new(controlChan)
 	ch.conn = conn
 	ch.authChan = invalidChanID
+	ch.contactReqChan = invalidChanID
 	return ch
 }

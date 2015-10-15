@@ -193,7 +193,13 @@ func (ch *authHSChan) onPacket(rawPkt []byte) error {
 		if isKnown {
 			// Mark contact online.
 		} else {
-			// Send a request contact message.
+			// Send a request contact message, if possible.
+			// HACK HACK HACK HACK HACK
+			req := &ContactRequest{
+				MyNickname: "TestClientPlsIgnore",
+				Message:    "Testing contact request...",
+			}
+			return newClientContactReqChan(ch.conn, req)
 		}
 
 		// Send a channel close.  The server in theory should be responsible

@@ -79,12 +79,7 @@ const (
 	unknownHostname = "<unknown>"
 	onionSuffix     = ".onion"
 
-	chatChannelType       = "im.ricochet.chat"
-	contactReqChannelType = "im.ricochet.contact.request"
-
-	// Limits from src/protocol/ContactsRequestChannel.proto
-	contactReqMessageMaxCharacters  = 2000
-	contactReqNicknameMaxCharacters = 30
+	chatChannelType = "im.ricochet.chat"
 
 	contactAttemptInterval = 5 * time.Second
 	handshakeTimeout       = 30 * time.Second
@@ -232,7 +227,8 @@ func (e *Endpoint) SendMsg(hostname, message string) error {
 	return nil
 }
 
-func (e *Endpoint) clientHandshake(hostname string) {
+// XXX: Temporarily expose this for testing.
+func (e *Endpoint) ClientHandshake(hostname string) {
 	dialHostname := hostname
 	if !strings.HasSuffix(hostname, onionSuffix) {
 		dialHostname = hostname + onionSuffix
