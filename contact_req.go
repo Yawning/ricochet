@@ -35,16 +35,25 @@ func (req *ContactRequest) String() string {
 	return fmt.Sprintf("'%v':'%v'", req.MyNickname, req.Message)
 }
 
+type contactReqChanState int
+
+const (
+	contactReqChanStateOpening contactReqChanState = iota
+	contactReqChanStateOpen
+	contactReqChanStateDone
+)
+
 type contactReqChan struct {
 	conn   *ricochetConn
 	chanID uint16
+	state  contactReqChanState
 
-	isOpen  bool
-	isDone  bool
 	reqData *ContactRequest
 }
 
 func (ch *contactReqChan) onOpenChannel() error {
+	ch.state = contactReqChanStateOpen
+
 	// Stop the timer since the peer took sufficient action.
 	ch.conn.authTimer.Stop()
 
@@ -72,11 +81,11 @@ func (ch *contactReqChan) onChannelResult(msg *packet.ChannelResult) error {
 	if ch.conn.isServer {
 		return fmt.Errorf("opened contact req channel to client")
 	}
-	if ch.isOpen {
+	if ch.state != contactReqChanStateOpening {
 		return fmt.Errorf("received spurious ContactRequest ChannelResult")
 	}
+	ch.state = contactReqChanStateOpen
 
-	ch.isOpen = true
 	// If this routine was called, the channel WAS opened, without incident.
 	// Extract the response, and take action accordingly.
 	ext, err := proto.GetExtension(msg, packet.E_Response)
@@ -91,7 +100,7 @@ func (ch *contactReqChan) onPacket(rawPkt []byte) error {
 	if ch.conn.isServer {
 		return fmt.Errorf("received contact req packet from client")
 	}
-	if ch.isDone {
+	if ch.state != contactReqChanStateOpen {
 		return fmt.Errorf("received contact req packet after completion")
 	}
 
@@ -113,7 +122,7 @@ func (ch *contactReqChan) onResponse(resp *packet.ContactRequestResponse) error 
 		ch.conn.getControlChan().isKnownToPeer = true
 		// XXX: Mark peer online.
 		// XXX: Close the channel.
-		ch.isDone = true
+		ch.state = contactReqChanStateDone
 	case packet.ContactRequestResponse_Rejected:
 		log.Printf("client: server '%s' rejected contact request", ch.conn.hostname)
 		// XXX: Mark peer as rejected.
