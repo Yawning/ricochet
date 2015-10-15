@@ -132,6 +132,9 @@ func (ch *authHSChan) onPacket(rawPkt []byte) error {
 			return err
 		}
 
+		// XXX: Check against the hostname blacklist for rejected peers,
+		// and early reject clients we don't want to hear from.
+
 		// Calculate the proof.
 		proof := ch.calculateProof(clientHostname, ch.conn.endpoint.hostname)
 

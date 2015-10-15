@@ -39,7 +39,7 @@ func (m *contactMgr) outgoingConnectionWorker() {
 
 		var err error
 		for id, contact := range m.knownContacts {
-			if contact.outgoingConn != nil {
+			if contact.outgoingConn != nil || contact.incomingConn != nil {
 				continue
 			}
 			contact.outgoingConn, err = m.endpoint.dialClient(id)
@@ -48,7 +48,8 @@ func (m *contactMgr) outgoingConnectionWorker() {
 			}
 		}
 		for id, contact := range m.pendingContacts {
-			if contact.outgoingConn != nil {
+			// Should never have a incoming conn, but check anyway, whatever.
+			if contact.outgoingConn != nil || contact.incomingConn != nil {
 				continue
 			}
 			contact.outgoingConn, err = m.endpoint.dialClient(id)
@@ -125,11 +126,11 @@ func (m *contactMgr) onOutgoingConnectionAuthed(conn *ricochetConn) {
 		}
 
 		// This should be a pending contact, since the peer doesn't know about
-		// us and we're connected to them.
+		// us and we explicitly connected to them.
 		contact := m.pendingContacts[conn.hostname]
 		if contact == nil {
-			// XXX: WTF, we connected to a contact we are not interested in
-			// at all.
+			// WTF, we connected to a contact we are not interested in
+			// at all.  Fuck it, jsut close the connection.
 			conn.conn.Close()
 			return
 		}
@@ -149,6 +150,9 @@ func (m *contactMgr) onOutgoingConnectionAuthed(conn *ricochetConn) {
 		}
 		return
 	}
+
+	// Ok, the peer claims to know about us.  If we were pending on a contact
+	// request, treat that as an accept.  Otherwise, we're good to go now.
 
 	_ = isKnown
 }
