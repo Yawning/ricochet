@@ -49,7 +49,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -81,12 +80,17 @@ const (
 
 	chatChannelType = "im.ricochet.chat"
 
-	contactAttemptInterval = 5 * time.Second
-	handshakeTimeout       = 30 * time.Second
-	authenticationTimeout  = 30 * time.Second
+	handshakeTimeout      = 30 * time.Second
+	authenticationTimeout = 30 * time.Second
 )
 
 var handshakePrefix = []byte{0x49, 0x4d}
+
+type EndpointConfig struct {
+	TorControlPort *bulb.Conn
+	PrivateKey     *rsa.PrivateKey
+	KnownContacts  []string
+}
 
 type Endpoint struct {
 	sync.Mutex
@@ -97,6 +101,8 @@ type Endpoint struct {
 	ctrl       *bulb.Conn
 	isoBase    *proxy.Auth
 	ln         net.Listener
+
+	contacts *contactMgr
 }
 
 type ricochetConn struct {
@@ -177,35 +183,27 @@ func (c *ricochetConn) allocateNextChanID() (uint16, error) {
 	return chanID, nil
 }
 
-func NewEndpoint(ctrl *bulb.Conn, privateKey *rsa.PrivateKey) (e *Endpoint, err error) {
-	if privateKey == nil {
-		return nil, errors.New("no private key provided")
-	}
-
+func NewEndpoint(cfg *EndpointConfig) (e *Endpoint, err error) {
 	e = new(Endpoint)
-	e.hostname, _ = pkcs1.OnionAddr(&privateKey.PublicKey)
-	e.privateKey = privateKey
-	e.ctrl = ctrl
+	e.hostname, _ = pkcs1.OnionAddr(&cfg.PrivateKey.PublicKey)
+	e.privateKey = cfg.PrivateKey
+	e.ctrl = cfg.TorControlPort
 	e.isoBase, err = getIsolationAuth()
 	if err != nil {
 		return nil, err
 	}
 
-	e.ln, err = ctrl.Listener(ricochetPort, privateKey)
+	e.ln, err = e.ctrl.Listener(ricochetPort, e.privateKey)
 	if err != nil {
 		return nil, err
 	}
 
 	log.Printf("server: online as '%v'", e.hostname)
 
-	go e.outgoingContactWorker()
+	e.contacts = newContactMgr(e, cfg.KnownContacts)
 	go e.hsAcceptWorker()
 
 	return e, nil
-}
-
-func (e *Endpoint) outgoingContactWorker() {
-
 }
 
 func (e *Endpoint) hsAcceptWorker() {
@@ -227,8 +225,7 @@ func (e *Endpoint) SendMsg(hostname, message string) error {
 	return nil
 }
 
-// XXX: Temporarily expose this for testing.
-func (e *Endpoint) ClientHandshake(hostname string) {
+func (e *Endpoint) dialClient(hostname string) (*ricochetConn, error) {
 	dialHostname := hostname
 	if !strings.HasSuffix(hostname, onionSuffix) {
 		dialHostname = hostname + onionSuffix
@@ -241,18 +238,37 @@ func (e *Endpoint) ClientHandshake(hostname string) {
 	d, err := e.ctrl.Dialer(auth)
 	if err != nil {
 		log.Printf("client: Failed to get outgoing Dialer: %v", err)
-		return
+		return nil, err
 	}
 
+	rConn := new(ricochetConn)
+	rConn.endpoint = e
+	rConn.hostname = hostname
+	rConn.isServer = false
+	rConn.nextChanID = 1
+	go rConn.clientHandshake(d, dialHostname)
+
+	return rConn, nil
+}
+
+func (c *ricochetConn) clientHandshake(d proxy.Dialer, dialHostname string) {
+	var err error
+	defer func() {
+		if c.conn != nil {
+			c.conn.Close()
+		}
+		c.endpoint.contacts.onOutgoingConnectionClosed(c)
+	}()
+
 	// Open the connection to the remote HS.
-	conn, err := d.Dial("tcp", dialHostname)
+	c.conn, err = d.Dial("tcp", dialHostname)
 	if err != nil {
 		log.Printf("client: Failed to connect to '%v' : %v", dialHostname, err)
 		return
 	}
 
 	// Arm the handshake timeout.
-	if err := conn.SetDeadline(time.Now().Add(handshakeTimeout)); err != nil {
+	if err := c.conn.SetDeadline(time.Now().Add(handshakeTimeout)); err != nil {
 		log.Printf("client: Failed to arm handshake timeout: %v", err)
 		return
 	}
@@ -260,14 +276,14 @@ func (e *Endpoint) ClientHandshake(hostname string) {
 	// Send prefix | nVersions | version.
 	hsPrefix := append(handshakePrefix, 1)       // Sending one version...
 	hsPrefix = append(hsPrefix, protocolVersion) // ... this one.
-	if _, err := conn.Write(hsPrefix); err != nil {
+	if _, err := c.conn.Write(hsPrefix); err != nil {
 		log.Printf("client: Failed to send prefix | nVersions | version: %v", err)
 		return
 	}
 
 	// Read the negotiated version.
 	var respVer [1]byte
-	if _, err := io.ReadFull(conn, respVer[:]); err != nil {
+	if _, err := io.ReadFull(c.conn, respVer[:]); err != nil {
 		log.Printf("client: Failed to read negotiated version: %v", err)
 		return
 	}
@@ -277,34 +293,26 @@ func (e *Endpoint) ClientHandshake(hostname string) {
 	}
 
 	// Disarm the handshake timeout.
-	if err := conn.SetDeadline(time.Time{}); err != nil {
+	if err := c.conn.SetDeadline(time.Time{}); err != nil {
 		log.Printf("client: Failed to disarm handshake timeout: %v", err)
 		return
 	}
 
-	rConn := new(ricochetConn)
-	rConn.endpoint = e
-	rConn.conn = conn
-	rConn.hostname = hostname
-	rConn.isServer = false
-	rConn.nextChanID = 1
-	rConn.chanMap = make(map[uint16]ricochetChan)
-	rConn.chanMap[controlChanID] = newControlChan(rConn, controlChanID)
+	c.chanMap = make(map[uint16]ricochetChan)
+	c.chanMap[controlChanID] = newControlChan(c, controlChanID)
 
-	fuck := func() { _ = conn.Close() }
-	rConn.authTimer = time.AfterFunc(authenticationTimeout, fuck)
+	fuck := func() { _ = c.conn.Close() }
+	c.authTimer = time.AfterFunc(authenticationTimeout, fuck)
 
 	// Send the OpenChannel(AuthHS) request before doing anything else.  The
 	// rest of the process is driven by receiving responses from the server,
 	// or 'fuck()'.
-	if err := newClientAuthHSChan(rConn); err != nil {
+	if err := newClientAuthHSChan(c); err != nil {
 		log.Printf("client: Failed to start authentication: %v", err)
 		return
 	}
 
-	rConn.incomingPacketWorker()
-
-	// XXX: Remove connection from the global state.
+	c.incomingPacketWorker()
 }
 
 func (e *Endpoint) serverHandshake(conn net.Conn) {

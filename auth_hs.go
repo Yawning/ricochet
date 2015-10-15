@@ -148,10 +148,11 @@ func (ch *authHSChan) onPacket(rawPkt []byte) error {
 			ch.conn.getControlChan().isAuthenticated = true
 			ch.conn.getControlChan().isKnownToPeer = true
 			ch.conn.hostname = clientHostname
-			// XXX: Is it worth saving the client public key?
-			// XXX: isKnow = ch.conn.endpoint.blahblahblah
+			isKnown, err = ch.conn.endpoint.contacts.onIncomingConnection(ch.conn)
+			if err != nil {
+				return err
+			}
 
-			// XXX: Move this into the mark online code.
 			if isKnown {
 				// Known peer, connection is established.
 				ch.conn.authTimer.Stop()
@@ -168,10 +169,8 @@ func (ch *authHSChan) onPacket(rawPkt []byte) error {
 			return wrErr
 		}
 
-		// Mark the client as online as appropriate.
-
-		// Send a channel close.  This should be sent on the error cases as
-		// well, but instead the connection is just torn down.
+		// XXX: Send a channel close.  This should be sent on the error cases
+		// as well, but instead the connection is just torn down.
 
 		return err
 	} else {
@@ -189,22 +188,11 @@ func (ch *authHSChan) onPacket(rawPkt []byte) error {
 		ch.conn.getControlChan().isAuthenticated = true
 		ch.conn.getControlChan().isKnownToPeer = isKnown
 		ch.conn.authTimer.Stop() // Stop the fuck().
+		ch.conn.endpoint.contacts.onOutgoingConnectionAuthed(ch.conn)
 
-		if isKnown {
-			// Mark contact online.
-		} else {
-			// Send a request contact message, if possible.
-			// HACK HACK HACK HACK HACK
-			req := &ContactRequest{
-				MyNickname: "TestClientPlsIgnore",
-				Message:    "Testing contact request...",
-			}
-			return newClientContactReqChan(ch.conn, req)
-		}
-
-		// Send a channel close.  The server in theory should be responsible
-		// here, but the whole channel thing is a mess anyway, so fuck it,
-		// whatever.
+		// XXX: Send a channel close.  The server in theory should be
+		// responsible here, but the whole channel thing is a mess anyway, so
+		// fuck it, whatever.
 
 		return nil
 	}

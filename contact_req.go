@@ -48,9 +48,6 @@ func (ch *contactReqChan) onOpenChannel() error {
 	// Stop the timer since the peer took sufficient action.
 	ch.conn.authTimer.Stop()
 
-	// XXX: If the contact is already authorized (or explicitly rejected),
-	// send the response immediately.
-
 	log.Printf("server: ContactRequest from: '%v' (%s)", ch.conn.hostname, ch.reqData)
 
 	resp := &packet.ContactRequestResponse{
@@ -113,11 +110,13 @@ func (ch *contactReqChan) onResponse(resp *packet.ContactRequestResponse) error 
 	case packet.ContactRequestResponse_Accepted:
 		// Accepted.
 		log.Printf("client: server '%s' accepted contact request", ch.conn.hostname)
+		ch.conn.getControlChan().isKnownToPeer = true
 		// XXX: Mark peer online.
 		// XXX: Close the channel.
 		ch.isDone = true
 	case packet.ContactRequestResponse_Rejected:
 		log.Printf("client: server '%s' rejected contact request", ch.conn.hostname)
+		// XXX: Mark peer as rejected.
 		return fmt.Errorf("contact request rejected by peer")
 	case packet.ContactRequestResponse_Error:
 		// XXX: Mark peer as having issues, reschedule connection.
