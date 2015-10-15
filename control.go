@@ -163,11 +163,11 @@ func (ch *controlChan) onChannelResultMsg(msg *packet.ChannelResult) error {
 		return fmt.Errorf("peer opened invalid channel ID: %v", rawChanID)
 	}
 	chanID := (uint16)(rawChanID) // So fucking stupid.
-	if ch.conn.isServer && (chanID&1 == 0) {
-		return fmt.Errorf("client opened even channel ID: %v", chanID)
+	if ch.conn.isServer && (chanID&1 == 1) {
+		return fmt.Errorf("client opened odd channel ID: %v", chanID)
 	}
-	if !ch.conn.isServer && (chanID&1 == 1) {
-		return fmt.Errorf("server opened odd channel ID: %v", chanID)
+	if !ch.conn.isServer && (chanID&1 == 0) {
+		return fmt.Errorf("server opened even channel ID: %v", chanID)
 	}
 	openedChan := ch.conn.chanMap[chanID]
 	if openedChan == nil {
