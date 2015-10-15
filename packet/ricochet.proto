@@ -1,0 +1,141 @@
+// Ricochet protocol buffers file, consolidated for Go lang.
+//
+// If there's a better way to deal with package, that doesn't make it a giant
+// pain to regenerate the protoc files, let me know.
+//
+
+package packet;
+
+//
+// Base definitions (aka the "ControlChannel")
+//
+
+message ControlPacket {
+    // Must contain exactly one field
+    optional OpenChannel open_channel = 1;
+    optional ChannelResult channel_result = 2;
+    optional KeepAlive keep_alive = 3;
+    optional EnableFeatures enable_features = 4;
+    optional FeaturesEnabled features_enabled = 5;
+}
+
+message OpenChannel {
+    required int32 channel_identifier = 1;      // Arbitrary unique identifier for this channel instance
+    required string channel_type = 2;           // String identifying channel type; e.g. im.ricochet.chat
+
+    // It is valid to extend the OpenChannel message to add fields specific
+    // to the requested channel_type.
+    extensions 100 to max;
+}
+
+message ChannelResult {
+    required int32 channel_identifier = 1;      // Matching the value from OpenChannel
+    required bool opened = 2;                   // If the channel is now open
+
+    enum CommonError {
+        GenericError = 0;
+        UnknownTypeError = 1;
+        UnauthorizedError = 2;
+        BadUsageError = 3;
+        FailedError = 4;
+    }
+
+    optional CommonError common_error = 3;
+
+    // As with OpenChannel, it is valid to extend this message with fields specific
+    // to the channel type.
+    extensions 100 to max;
+}
+
+message KeepAlive {
+    required bool response_requested = 1;
+}
+
+message EnableFeatures {
+    repeated string feature = 1;
+    extensions 100 to max;
+}
+
+message FeaturesEnabled {
+    repeated string feature = 1;
+    extensions 100 to max;
+}
+
+//
+// AuthHiddenService channel definitions.
+//
+
+extend OpenChannel {
+    optional bytes client_cookie = 7200;    // 16 random bytes
+}
+
+extend ChannelResult {
+    optional bytes server_cookie = 7200;      // 16 random bytes
+}
+
+message AuthHSPacket {
+    optional AuthHSProof proof = 1;
+    optional AuthHSResult result = 2;
+}
+
+message AuthHSProof {
+    optional bytes public_key = 1;      // DER encoded public key
+    optional bytes signature = 2;       // RSA signature
+}
+
+message AuthHSResult {
+    required bool accepted = 1;
+    optional bool is_known_contact = 2;
+}
+
+//
+// ContactRequest channel definitions.
+//
+
+extend OpenChannel {
+    optional ContactRequest contact_request = 200;
+}
+
+extend ChannelResult {
+    optional ContactRequestResponse response = 201;
+}
+
+// Sent only as an attachment to OpenChannel
+message ContactRequest {
+    optional string nickname = 1;
+    optional string message_text = 2;
+}
+
+// Response is the only valid message to send on the channel
+message ContactRequestResponse {
+    enum Status {
+        Undefined = 0; // Not valid on the wire
+        Pending = 1;
+        Accepted = 2;
+        Rejected = 3;
+        Error = 4;
+    }
+
+    required Status status = 1;
+}
+
+//
+// Chat channel definitions.
+//
+
+message ChatPacket {
+    optional ChatMessage chat_message = 1;
+    optional ChatAcknowledge chat_acknowledge = 2;
+}
+
+message ChatMessage {
+    required string message_text = 1;
+    optional uint32 message_id = 2;                // Random ID for ack
+    optional int64 time_delta = 3;                 // Delta in seconds between now and when message was written
+}
+
+message ChatAcknowledge {
+    optional uint32 message_id = 1;
+    optional bool accepted = 2 [default = true];
+}
+
