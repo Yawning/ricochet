@@ -29,6 +29,10 @@ package ricochet
 //     information to actually verify proof signatures.
 //  * Signing the HMAC output directly, despite using a NID denoting SHA256 is
 //    unusual.
+//  * The reference implementation closes the connection when previously 
+//    rejected clients try to authenticate.  This behavior leads to ambiguious
+//    state on the client where the client can't tell if it's a transient
+//    networking error or a rejection.
 //  * The whole channel thing is over-engineering and over-complication.
 //    * All the channels are singletons, and all but chat are only ever client
 //      initiated.
