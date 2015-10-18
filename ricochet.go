@@ -11,7 +11,7 @@ package ricochet
 //
 // Annoyances with the current spec:
 //  * There is no "correct" behavior specified for when more than 1 connection
-//    exists from a given peer.  Yes, it's a race condition, yes behavior
+//    exists to/from a given peer.  Yes, it's a race condition, yes behavior
 //    should be specified.
 //  * `channel_identifier` is specified as a int32 when opening, but
 //    packetization only allows for a uint16.
@@ -26,13 +26,15 @@ package ricochet
 //    to exchange a EnableFeatures/FeatureEnabled pair (as the first set of
 //    messages).  This should be specified as such.
 //  * "using PKCS #1 v2.0 (as per OpenSSL RSA_sign)" is insufficient
-//     information to actually verify proof signatures.
+//    information to actually verify proof signatures.
 //  * Signing the HMAC output directly, despite using a NID denoting SHA256 is
 //    unusual.
 //  * The reference implementation closes the connection when previously
 //    rejected clients try to authenticate.  This behavior leads to ambiguious
 //    state on the client where the client can't tell if it's a transient
 //    networking error or a rejection.
+//  * The spec should explicitly state which party closes the contact request
+//    channel, after an accept/reject/error response is sent (the server?).
 //  * The whole channel thing is over-engineering and over-complication.
 //    * All the channels are singletons, and all but chat are only ever client
 //      initiated.
@@ -77,7 +79,9 @@ const (
 type EndpointConfig struct {
 	TorControlPort *bulb.Conn
 	PrivateKey     *rsa.PrivateKey
-	KnownContacts  []string
+
+	KnownContacts       []string
+	BlacklistedContacts []string
 }
 
 type Endpoint struct {
@@ -89,6 +93,8 @@ type Endpoint struct {
 	ctrl       *bulb.Conn
 	isoBase    *proxy.Auth
 	ln         net.Listener
+
+	blacklist map[string]bool
 }
 
 func NewEndpoint(cfg *EndpointConfig) (e *Endpoint, err error) {
@@ -99,6 +105,10 @@ func NewEndpoint(cfg *EndpointConfig) (e *Endpoint, err error) {
 	e.isoBase, err = getIsolationAuth()
 	if err != nil {
 		return nil, err
+	}
+	e.blacklist = make(map[string]bool)
+	for _, id := range cfg.BlacklistedContacts {
+		e.blacklist[id] = true
 	}
 
 	e.ln, err = e.ctrl.Listener(ricochetPort, e.privateKey)
@@ -111,6 +121,14 @@ func NewEndpoint(cfg *EndpointConfig) (e *Endpoint, err error) {
 	go e.hsAcceptWorker()
 
 	return e, nil
+}
+
+func (e *Endpoint) AddContact(hostname, requestData *ContactRequest) error {
+	return nil
+}
+
+func (e *Endpoint) SendMsg(hostname, message string) error {
+	return nil
 }
 
 func (e *Endpoint) hsAcceptWorker() {
@@ -126,14 +144,6 @@ func (e *Endpoint) hsAcceptWorker() {
 		}
 		go e.acceptServer(conn)
 	}
-}
-
-func (e *Endpoint) AddContact(hostname, requestData *ContactRequest) error {
-	return nil
-}
-
-func (e *Endpoint) SendMsg(hostname, message string) error {
-	return nil
 }
 
 func (e *Endpoint) dialClient(hostname string) (*ricochetConn, error) {
@@ -172,6 +182,13 @@ func (e *Endpoint) acceptServer(conn net.Conn) {
 	rConn.nextChanID = 2
 	rConn.chanMap = make(map[uint16]ricochetChan)
 	rConn.serverHandshake()
+}
+
+func (e *Endpoint) isBlacklisted(hostname string) bool {
+	e.Lock()
+	defer e.Unlock()
+
+	return e.blacklist[hostname]
 }
 
 func getIsolationAuth() (*proxy.Auth, error) {

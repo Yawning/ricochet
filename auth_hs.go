@@ -121,85 +121,12 @@ func (ch *authHSChan) onPacket(rawPkt []byte) error {
 	}
 
 	if ch.conn.isServer {
-		proofMsg := authPkt.GetProof()
-		if proofMsg == nil {
-			return fmt.Errorf("missing proof")
-		}
-
-		// Decode and validate the public key.
-		pk, rest, err := pkcs1.DecodePublicKeyDER(proofMsg.GetPublicKey())
-		if err != nil {
-			return err
-		} else if rest != nil && len(rest) > 0 {
-			return fmt.Errorf("trailing garbage present after public key")
-		} else if pk.N.BitLen() != authHiddenServicePublicKeyBits {
-			return fmt.Errorf("invalid public modulus size: %d", pk.N.BitLen())
-		}
-
-		// Calculate the client hostname.
-		clientHostname, err := pkcs1.OnionAddr(pk)
-		if err != nil {
-			return err
-		}
-
-		// Note: The reference implementation checks against the hostname
-		// blacklist for rejected peers, and early rejects clients durring
-		// the authentication phase by closing the connection.
-		//
-		// This is a bit rude.  Check the blacklist and send a rejected
-		// response, then close the connection.
-
-		// Calculate the proof.
-		proof := ch.calculateProof(clientHostname, ch.conn.endpoint.hostname)
-
-		// Verify proof.
-		//
-		// The spec neglects to mention PKCS #1 v1.5/SHA256.  Also, not SHA256
-		// suming proof is deliberate because the ricochet code doesn't bother
-		// hashing the proof.
-		sig := proofMsg.GetSignature()
-		sigOk, isKnown := false, false
-		err = rsa.VerifyPKCS1v15(pk, crypto.SHA256, proof, sig)
-		if err == nil {
-			sigOk = true
-			ch.conn.getControlChan().isAuthenticated = true
-			ch.conn.getControlChan().isKnownToPeer = true
-			ch.conn.hostname = clientHostname
-			// XXX: Query the endpoint for known status.
-
-			if isKnown {
-				// Known peer, connection is established.
-				ch.conn.authTimer.Stop()
-			} else {
-				// Give them another interval to request contact.
-				ch.conn.authTimer.Reset(authenticationTimeout)
-			}
-		}
-
-		log.Printf("server: auth from client '%s' accepted: %v", clientHostname, sigOk)
-
-		//  Send the result to the client.
-		if wrErr := ch.sendResult(sigOk, isKnown); wrErr != nil {
-			return wrErr
-		}
-
-		// XXX: Notify the endpoint that a new inbound connection is available.
-		if sigOk {
-			if isKnown {
-
-			} else {
-
-			}
-		}
-
-		// Close the authentication channel.
-		if wrErr := ch.conn.sendChanClose(ch.chanID); wrErr != nil {
-			return wrErr
-		}
-		return err
+		return ch.onPacketServer(&authPkt)
 	}
+	return ch.onPacketClient(&authPkt)
+}
 
-	// Client side processing.
+func (ch *authHSChan) onPacketClient(authPkt *packet.AuthHSPacket) error {
 	resultMsg := authPkt.GetResult()
 	if resultMsg == nil {
 		return fmt.Errorf("missing result")
@@ -222,6 +149,90 @@ func (ch *authHSChan) onPacket(rawPkt []byte) error {
 	// past this point, apart from processing the server's close.
 
 	return nil
+}
+
+func (ch *authHSChan) onPacketServer(authPkt *packet.AuthHSPacket) error {
+	proofMsg := authPkt.GetProof()
+	if proofMsg == nil {
+		return fmt.Errorf("missing proof")
+	}
+
+	// Decode and validate the public key.
+	pk, rest, err := pkcs1.DecodePublicKeyDER(proofMsg.GetPublicKey())
+	if err != nil {
+		return err
+	} else if rest != nil && len(rest) > 0 {
+		return fmt.Errorf("trailing garbage present after public key")
+	} else if pk.N.BitLen() != authHiddenServicePublicKeyBits {
+		return fmt.Errorf("invalid public modulus size: %d", pk.N.BitLen())
+	}
+
+	// Calculate the client hostname.
+	clientHostname, err := pkcs1.OnionAddr(pk)
+	if err != nil {
+		return err
+	}
+
+	sigOk, isKnown := false, false
+
+	// Note: The reference implementation checks against the hostname
+	// blacklist for rejected peers, and early rejects clients durring
+	// the authentication phase by closing the connection.
+	//
+	// This is a bit rude.  Check the blacklist and send a rejected
+	// response, then close the connection (Done by virtue of returning
+	// an error).
+	if !ch.conn.endpoint.isBlacklisted(clientHostname) {
+		// Calculate the proof.
+		proof := ch.calculateProof(clientHostname, ch.conn.endpoint.hostname)
+
+		// Verify proof.
+		//
+		// The spec neglects to mention PKCS #1 v1.5/SHA256.  Also, not
+		// SHA256 suming proof is deliberate because the ricochet code
+		// doesn't bother hashing the proof.
+		sig := proofMsg.GetSignature()
+		err = rsa.VerifyPKCS1v15(pk, crypto.SHA256, proof, sig)
+		if err == nil {
+			sigOk = true
+			ch.conn.getControlChan().isAuthenticated = true
+			ch.conn.getControlChan().isKnownToPeer = true
+			ch.conn.hostname = clientHostname
+			// XXX: Query the endpoint for known status.
+
+			if isKnown {
+				// Known peer, connection is established.
+				ch.conn.authTimer.Stop()
+			} else {
+				// Give them another interval to request contact.
+				ch.conn.authTimer.Reset(authenticationTimeout)
+			}
+		}
+	} else {
+		err = fmt.Errorf("auth from blacklisted peer: '%v'", clientHostname)
+	}
+
+	log.Printf("server: auth from client '%s' accepted: %v", clientHostname, sigOk)
+
+	//  Send the result to the client.
+	if wrErr := ch.sendResult(sigOk, isKnown); wrErr != nil {
+		return wrErr
+	}
+
+	// XXX: Notify the endpoint that a new inbound connection is available.
+	if sigOk {
+		if isKnown {
+
+		} else {
+
+		}
+	}
+
+	// Close the authentication channel.
+	if wrErr := ch.conn.sendChanClose(ch.chanID); wrErr != nil {
+		return wrErr
+	}
+	return err
 }
 
 func (ch *authHSChan) onClose() error {
