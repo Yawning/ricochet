@@ -29,8 +29,8 @@ const (
 
 	pktHdrSize = 2 + 2
 
-	handshakeTimeout      = 30 * time.Second
-	authenticationTimeout = 30 * time.Second
+	handshakeTimeout      = 15 * time.Second
+	authenticationTimeout = 15 * time.Second
 )
 
 var handshakePrefix = []byte{0x49, 0x4d}
