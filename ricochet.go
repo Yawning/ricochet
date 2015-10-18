@@ -68,13 +68,17 @@ import (
 const (
 	PublicKeyBits = 1024
 
-	ricochetPort = 9878
+	ricochetPort         = 9878
+	ricochetHostnameSize = 16
 
 	unknownHostname = "<unknown>"
 	onionSuffix     = ".onion"
+	ricochetPrefix  = "ricochet:"
 
 	chatChannelType = "im.ricochet.chat"
 )
+
+var ricochetHostnameMap map[rune]bool
 
 type EndpointConfig struct {
 	TorControlPort *bulb.Conn
@@ -108,7 +112,9 @@ func NewEndpoint(cfg *EndpointConfig) (e *Endpoint, err error) {
 	}
 	e.blacklist = make(map[string]bool)
 	for _, id := range cfg.BlacklistedContacts {
-		e.blacklist[id] = true
+		if err := e.BlacklistContact(id, true); err != nil {
+			return nil, err
+		}
 	}
 
 	e.ln, err = e.ctrl.Listener(ricochetPort, e.privateKey)
@@ -123,13 +129,26 @@ func NewEndpoint(cfg *EndpointConfig) (e *Endpoint, err error) {
 	return e, nil
 }
 
-func (e *Endpoint) AddContact(hostname, requestData *ContactRequest) error {
+func (e *Endpoint) AddContact(hostname string, requestData *ContactRequest) error {
+	e.Lock()
+	defer e.Unlock()
+
+	hostname, err := normalizeHostname(hostname)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
-func (e *Endpoint) BlacklistContact(hostname string, set bool) {
+func (e *Endpoint) BlacklistContact(hostname string, set bool) error {
 	e.Lock()
 	defer e.Unlock()
+
+	hostname, err := normalizeHostname(hostname)
+	if err != nil {
+		return err
+	}
 
 	if set {
 		e.blacklist[hostname] = true
@@ -137,9 +156,27 @@ func (e *Endpoint) BlacklistContact(hostname string, set bool) {
 	} else {
 		delete(e.blacklist, hostname)
 	}
+	return nil
+}
+
+func (e *Endpoint) RemoveContact(hostname string) error {
+	e.Lock()
+	defer e.Unlock()
+
+	hostname, err := normalizeHostname(hostname)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (e *Endpoint) SendMsg(hostname, message string) error {
+	hostname, err := normalizeHostname(hostname)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -159,10 +196,7 @@ func (e *Endpoint) hsAcceptWorker() {
 }
 
 func (e *Endpoint) dialClient(hostname string) (*ricochetConn, error) {
-	dialHostname := hostname
-	if !strings.HasSuffix(hostname, onionSuffix) {
-		dialHostname = hostname + onionSuffix
-	}
+	dialHostname := hostname + onionSuffix
 	dialHostname = fmt.Sprintf("%s:%d", dialHostname, ricochetPort)
 	log.Printf("client: new server connection: '%v'", hostname)
 
@@ -203,6 +237,27 @@ func (e *Endpoint) isBlacklisted(hostname string) bool {
 	return e.blacklist[hostname]
 }
 
+func normalizeHostname(hostname string) (string, error) {
+	// Convert the hostname to lower case, strip off 'ricochet:' and
+	// '.onion' if present.  This will need to be changed for ed25519
+	// hidden services, but that's a while out yet, and the whole protocol
+	// will need a revamp.
+	newStr := strings.ToLower(hostname)
+	newStr = strings.TrimPrefix(newStr, ricochetPrefix)
+	newStr = strings.TrimSuffix(newStr, onionSuffix)
+
+	if len(newStr) != ricochetHostnameSize {
+		return "", fmt.Errorf("invalid hostname, not %d bytes", ricochetHostnameSize)
+	}
+	for _, ch := range newStr {
+		if !ricochetHostnameMap[ch] {
+			return "", fmt.Errorf("invalid hostname char: '%v'", ch)
+		}
+	}
+
+	return newStr, nil
+}
+
 func getIsolationAuth() (*proxy.Auth, error) {
 	const isoUsername = "ricochet-client:"
 
@@ -213,4 +268,11 @@ func getIsolationAuth() (*proxy.Auth, error) {
 	isoHash := sha256.Sum256(isoSeed[:])
 	isoCookie := base64.StdEncoding.EncodeToString(isoHash[:])
 	return &proxy.Auth{User: isoUsername + isoCookie}, nil
+}
+
+func init() {
+	ricochetHostnameMap = make(map[rune]bool)
+	for _, ch := range "abcdefghijklmnopqrstuvwxyz234567" {
+		ricochetHostnameMap[ch] = true
+	}
 }
