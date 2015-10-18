@@ -192,8 +192,10 @@ func (ch *authHSChan) onPacket(rawPkt []byte) error {
 			}
 		}
 
-		// XXX: Close the authentication channel.
-
+		// Close the authentication channel.
+		if wrErr := ch.conn.sendChanClose(ch.chanID); wrErr != nil {
+			return wrErr
+		}
 		return err
 	}
 
@@ -214,9 +216,10 @@ func (ch *authHSChan) onPacket(rawPkt []byte) error {
 	ch.conn.authTimer.Stop() // Stop the fuck().
 	// XXX: Notify endpoint that the connection was authenticated.
 
-	// XXX: Send a channel close.  The server in theory should be
-	// responsible here, but the whole channel thing is a mess anyway, so
-	// fuck it, whatever.
+	// XXX: Send a channel close?  This is something the server ought to be
+	// doing, so don't bother for now.  This code will not use this channel
+	// past this point, apart from processing the server's close.
+
 	return nil
 }
 

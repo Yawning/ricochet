@@ -128,6 +128,10 @@ func (e *Endpoint) hsAcceptWorker() {
 	}
 }
 
+func (e *Endpoint) AddContact(hostname, requestData *ContactRequest) error {
+	return nil
+}
+
 func (e *Endpoint) SendMsg(hostname, message string) error {
 	return nil
 }

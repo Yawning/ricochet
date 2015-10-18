@@ -95,8 +95,11 @@ func (c *ricochetConn) sendPacket(pktChan uint16, pktData []byte) error {
 	if _, err := c.conn.Write(pktHdr[:]); err != nil {
 		return err
 	}
-	_, err := c.conn.Write(pktData)
-	return err
+	if pktLen > pktHdrSize {
+		_, err := c.conn.Write(pktData)
+		return err
+	}
+	return nil
 }
 
 func (c *ricochetConn) allocateNextChanID() (uint16, error) {
@@ -162,6 +165,7 @@ func (c *ricochetConn) clientHandshake(d proxy.Dialer, dialHostname string) {
 		return
 	}
 
+	// Allocate the control channel and start the auth timeout.
 	c.chanMap[controlChanID] = newControlChan(c, controlChanID)
 	fuck := func() { _ = c.conn.Close() }
 	c.authTimer = time.AfterFunc(authenticationTimeout, fuck)
@@ -231,6 +235,7 @@ func (c *ricochetConn) serverHandshake() {
 		return
 	}
 
+	// Allocate the control channel and start the auth timeout.
 	c.chanMap[controlChanID] = newControlChan(c, controlChanID)
 	fuck := func() { _ = c.conn.Close() }
 	c.authTimer = time.AfterFunc(authenticationTimeout, fuck)
@@ -269,4 +274,18 @@ func (c *ricochetConn) demuxChanClose(chanID uint16) error {
 		return fmt.Errorf("close for invalid channel: %v", chanID)
 	}
 	return ch.onClose()
+}
+
+func (c *ricochetConn) sendChanClose(chanID uint16) error {
+	ch := c.chanMap[chanID]
+	if ch == nil {
+		return fmt.Errorf("attempted to send close for invalid channel: %v", chanID)
+	}
+
+	// The channel needs to be able to receive close messages from the peer,
+	// so leave it in the map.  This doesn't really matter for anything apart
+	// from chat channels since, the others only ever exist as part of the
+	// authenticate/contact request phases of the connection.
+
+	return c.sendPacket(chanID, nil)
 }

@@ -125,7 +125,10 @@ func (ch *contactReqChan) onResponse(resp *packet.ContactRequestResponse) error 
 		log.Printf("client: server '%s' accepted contact request", ch.conn.hostname)
 		ch.conn.getControlChan().isKnownToPeer = true
 		// XXX: Mark peer online.
-		// XXX: Close the channel.
+		// XXX: Send a channel close?  This is likewise something the server
+		// ought to be doing, so don't bother for now.  This code will not use
+		// the channel past this point, apart from processing the server's
+		// code.
 		ch.state = contactReqChanStateDone
 	case packet.ContactRequestResponse_Rejected:
 		log.Printf("client: server '%s' rejected contact request", ch.conn.hostname)
