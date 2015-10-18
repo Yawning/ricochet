@@ -35,6 +35,8 @@ package ricochet
 //    networking error or a rejection.
 //  * The spec should explicitly state which party closes the contact request
 //    channel, after an accept/reject/error response is sent (the server?).
+//  * There is no mention anywhere of MessageMaxCharacters, but the reference
+//    implementation will reject "oversized" messages.
 //  * The whole channel thing is over-engineering and over-complication.
 //    * All the channels are singletons, and all but chat are only ever client
 //      initiated.
@@ -74,8 +76,6 @@ const (
 	unknownHostname = "<unknown>"
 	onionSuffix     = ".onion"
 	ricochetPrefix  = "ricochet:"
-
-	chatChannelType = "im.ricochet.chat"
 )
 
 var ricochetHostnameMap map[rune]bool

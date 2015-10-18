@@ -36,8 +36,9 @@ type controlChan struct {
 	sentEnableFeatures   bool
 	keepAliveOutstanding bool
 
-	authChan       int
-	contactReqChan int
+	authChan         int
+	contactReqChan   int
+	incomingChatChan int
 }
 
 func (conn *ricochetConn) getControlChan() *controlChan {
@@ -151,11 +152,13 @@ func (ch *controlChan) onOpenChannelMsg(msg *packet.OpenChannel) error {
 		if !ch.isAuthenticated {
 			return fmt.Errorf("attempted to open chat channel pre-auth")
 		}
-		if !ch.isKnownToPeer {
-			// The peer is allowed to open a chat channel instead of sending
-			// a contact request response to signal acceptance. Ugh.
-			return fmt.Errorf("attempted to open chat channel to unknown contact")
+		if ch.incomingChatChan != invalidChanID {
+			return fmt.Errorf("attempted to open chat channel when one exists")
 		}
+		if newCh, err = newServerChatChan(ch.conn, msg); err != nil {
+			return err
+		}
+		ch.incomingChatChan = (int)(chanID)
 	default:
 		return fmt.Errorf("attempted to open unknown channel type")
 	}
@@ -294,5 +297,6 @@ func newControlChan(conn *ricochetConn, chanID uint16) *controlChan {
 	ch.conn = conn
 	ch.authChan = invalidChanID
 	ch.contactReqChan = invalidChanID
+	ch.incomingChatChan = invalidChanID
 	return ch
 }
