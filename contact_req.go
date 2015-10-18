@@ -155,6 +155,31 @@ func (ch *contactReqChan) onClose() error {
 	return nil
 }
 
+func (ch *contactReqChan) sendContactReqResponse(accepted bool) error {
+	if !ch.conn.isServer {
+		return fmt.Errorf("attempted to send contact request response from server")
+	}
+	if ch.state != contactReqChanStateOpen {
+		return fmt.Errorf("attempted to send contact request response when closed")
+	}
+
+	ch.state = contactReqChanStateDone
+	resp := &packet.ContactRequestResponse{}
+	if accepted {
+		resp.Status = packet.ContactRequestResponse_Accepted.Enum()
+	} else {
+		resp.Status = packet.ContactRequestResponse_Rejected.Enum()
+	}
+	rawPkt, err := proto.Marshal(resp)
+	if err != nil {
+		return err
+	}
+	if err := ch.conn.sendPacket(ch.chanID, rawPkt); err != nil {
+		return err
+	}
+	return ch.conn.sendChanClose(ch.chanID)
+}
+
 func newServerContactReqChan(conn *ricochetConn, msg *packet.OpenChannel) (*contactReqChan, error) {
 	ch := new(contactReqChan)
 	ch.conn = conn

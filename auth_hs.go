@@ -199,6 +199,7 @@ func (ch *authHSChan) onPacket(rawPkt []byte) error {
 		return err
 	}
 
+	// Client side processing.
 	resultMsg := authPkt.GetResult()
 	if resultMsg == nil {
 		return fmt.Errorf("missing result")

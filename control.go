@@ -45,6 +45,18 @@ func (conn *ricochetConn) getControlChan() *controlChan {
 	return ch.(*controlChan)
 }
 
+func (conn *ricochetConn) getContactRequestChan() *contactReqChan {
+	conn.Lock()
+	defer conn.Unlock()
+
+	ctrl := conn.getControlChan()
+	if ctrl.contactReqChan != invalidChanID {
+		ch := conn.chanMap[(uint16)(ctrl.contactReqChan)]
+		return ch.(*contactReqChan)
+	}
+	return nil
+}
+
 func (ch *controlChan) onOpenChannel() error {
 	panic("onOpenChannel() called for control channel")
 }
