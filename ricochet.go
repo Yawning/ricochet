@@ -127,6 +127,18 @@ func (e *Endpoint) AddContact(hostname, requestData *ContactRequest) error {
 	return nil
 }
 
+func (e *Endpoint) BlacklistContact(hostname string, set bool) {
+	e.Lock()
+	defer e.Unlock()
+
+	if set {
+		e.blacklist[hostname] = true
+		// XXX: Kill any pending connections to that peer.
+	} else {
+		delete(e.blacklist, hostname)
+	}
+}
+
 func (e *Endpoint) SendMsg(hostname, message string) error {
 	return nil
 }
