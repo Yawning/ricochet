@@ -19,8 +19,12 @@ import (
 const (
 	contactReqChannelType = "im.ricochet.contact.request"
 
-	// Limits from src/protocol/ContactsRequestChannel.proto
-	ContactReqMessageMaxCharacters  = 2000
+	// ContactReqMessageMaxCharacters is the max characters in an optional
+	// contact request message.
+	ContactReqMessageMaxCharacters = 2000
+
+	// ContactReqNicknameMaxCharacters is the max characters in an optional
+	// contact request nickname.
 	ContactReqNicknameMaxCharacters = 30
 )
 

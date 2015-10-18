@@ -165,10 +165,7 @@ func (ch *authHSChan) onPacket(rawPkt []byte) error {
 			ch.conn.getControlChan().isAuthenticated = true
 			ch.conn.getControlChan().isKnownToPeer = true
 			ch.conn.hostname = clientHostname
-			isKnown, err = ch.conn.endpoint.contacts.onIncomingConnection(ch.conn)
-			if err != nil {
-				return err
-			}
+			// XXX: Query the endpoint for known status.
 
 			if isKnown {
 				// Known peer, connection is established.
@@ -186,33 +183,41 @@ func (ch *authHSChan) onPacket(rawPkt []byte) error {
 			return wrErr
 		}
 
-		// XXX: Send a channel close.  This should be sent on the error cases
-		// as well, but instead the connection is just torn down.
+		// XXX: Notify the endpoint that a new inbound connection is available.
+		if sigOk {
+			if isKnown {
+
+			} else {
+
+			}
+		}
+
+		// XXX: Close the authentication channel.
 
 		return err
-	} else {
-		resultMsg := authPkt.GetResult()
-		if resultMsg == nil {
-			return fmt.Errorf("missing result")
-		}
-		if !resultMsg.GetAccepted() {
-			return fmt.Errorf("client: auth to '%s' rejected", ch.conn.hostname)
-		}
-
-		isKnown := resultMsg.GetIsKnownContact()
-		log.Printf("client: auth to server '%s' accepted isKnown: %v", ch.conn.hostname, isKnown)
-
-		ch.conn.getControlChan().isAuthenticated = true
-		ch.conn.getControlChan().isKnownToPeer = isKnown
-		ch.conn.authTimer.Stop() // Stop the fuck().
-		ch.conn.endpoint.contacts.onOutgoingConnectionAuthed(ch.conn)
-
-		// XXX: Send a channel close.  The server in theory should be
-		// responsible here, but the whole channel thing is a mess anyway, so
-		// fuck it, whatever.
-
-		return nil
 	}
+
+	resultMsg := authPkt.GetResult()
+	if resultMsg == nil {
+		return fmt.Errorf("missing result")
+	}
+	if !resultMsg.GetAccepted() {
+		// XXX: Notify the endpoint that the peer explicitly rejected auth.
+		return fmt.Errorf("client: auth to '%s' rejected", ch.conn.hostname)
+	}
+
+	isKnown := resultMsg.GetIsKnownContact()
+	log.Printf("client: auth to server '%s' accepted isKnown: %v", ch.conn.hostname, isKnown)
+
+	ch.conn.getControlChan().isAuthenticated = true
+	ch.conn.getControlChan().isKnownToPeer = isKnown
+	ch.conn.authTimer.Stop() // Stop the fuck().
+	// XXX: Notify endpoint that the connection was authenticated.
+
+	// XXX: Send a channel close.  The server in theory should be
+	// responsible here, but the whole channel thing is a mess anyway, so
+	// fuck it, whatever.
+	return nil
 }
 
 func (ch *authHSChan) onClose() error {

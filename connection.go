@@ -27,7 +27,7 @@ const (
 	protocolVersion      = 0x01
 	protocolVersionError = 0xff
 
-	packetHdrSize = 2 + 2
+	pktHdrSize = 2 + 2
 
 	handshakeTimeout      = 30 * time.Second
 	authenticationTimeout = 30 * time.Second
@@ -61,16 +61,18 @@ func (c *ricochetConn) nextPacket() (uint16, []byte, error) {
 	//  uint16_t size (Including header)
 	//  uint16_t channel
 	//  uint16_t data
-	var pktHdr [4]byte
+	var pktHdr [pktHdrSize]byte
 	if _, err := io.ReadFull(c.conn, pktHdr[:]); err != nil {
 		return 0, nil, fmt.Errorf("failed to read pkt header: %v", err)
 	}
 	pktSize := binary.BigEndian.Uint16(pktHdr[0:])
 	pktChan := binary.BigEndian.Uint16(pktHdr[2:])
-	if pktSize <= packetHdrSize {
+	if pktSize <= pktHdrSize {
+		// XXX: Technically this should reject 1/2/3 byte sizes instead of
+		// treating them as a channel close.
 		return pktChan, nil, io.EOF
 	}
-	pktSize -= packetHdrSize
+	pktSize -= pktHdrSize
 	pktData := make([]byte, pktSize)
 	if _, err := io.ReadFull(c.conn, pktData); err != nil {
 		return 0, nil, fmt.Errorf("failed to read pkt data: %v", err)
@@ -82,12 +84,12 @@ func (c *ricochetConn) sendPacket(pktChan uint16, pktData []byte) error {
 	c.Lock()
 	defer c.Unlock()
 
-	pktLen := packetHdrSize + len(pktData)
+	pktLen := pktHdrSize + len(pktData)
 	if pktLen > math.MaxUint16 {
 		return fmt.Errorf("pkt > max size: %v", pktLen)
 	}
 
-	var pktHdr [4]byte
+	var pktHdr [pktHdrSize]byte
 	binary.BigEndian.PutUint16(pktHdr[0:], uint16(pktLen))
 	binary.BigEndian.PutUint16(pktHdr[2:], pktChan)
 	if _, err := c.conn.Write(pktHdr[:]); err != nil {
@@ -119,7 +121,7 @@ func (c *ricochetConn) clientHandshake(d proxy.Dialer, dialHostname string) {
 		if c.conn != nil {
 			c.conn.Close()
 		}
-		c.endpoint.contacts.onOutgoingConnectionClosed(c)
+		// XXX: Notify endpoint that the connection was closed.
 	}()
 
 	// Open the connection to the remote HS.
@@ -160,9 +162,7 @@ func (c *ricochetConn) clientHandshake(d proxy.Dialer, dialHostname string) {
 		return
 	}
 
-	c.chanMap = make(map[uint16]ricochetChan)
 	c.chanMap[controlChanID] = newControlChan(c, controlChanID)
-
 	fuck := func() { _ = c.conn.Close() }
 	c.authTimer = time.AfterFunc(authenticationTimeout, fuck)
 
@@ -179,7 +179,10 @@ func (c *ricochetConn) clientHandshake(d proxy.Dialer, dialHostname string) {
 
 func (c *ricochetConn) serverHandshake() {
 	var err error
-	defer c.conn.Close()
+	defer func() {
+		c.conn.Close()
+		// XXX: Notify endpoint that the connection was closed.
+	}()
 
 	log.Printf("server: new client connection")
 
@@ -228,15 +231,11 @@ func (c *ricochetConn) serverHandshake() {
 		return
 	}
 
-	c.chanMap = make(map[uint16]ricochetChan)
 	c.chanMap[controlChanID] = newControlChan(c, controlChanID)
-
 	fuck := func() { _ = c.conn.Close() }
 	c.authTimer = time.AfterFunc(authenticationTimeout, fuck)
 
 	c.incomingPacketWorker()
-
-	// XXX: Remove from global state.
 }
 
 func (c *ricochetConn) incomingPacketWorker() {

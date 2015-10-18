@@ -89,8 +89,6 @@ type Endpoint struct {
 	ctrl       *bulb.Conn
 	isoBase    *proxy.Auth
 	ln         net.Listener
-
-	contacts *contactMgr
 }
 
 func NewEndpoint(cfg *EndpointConfig) (e *Endpoint, err error) {
@@ -110,7 +108,6 @@ func NewEndpoint(cfg *EndpointConfig) (e *Endpoint, err error) {
 
 	log.Printf("server: online as '%v'", e.hostname)
 
-	e.contacts = newContactMgr(e, cfg.KnownContacts, nil)
 	go e.hsAcceptWorker()
 
 	return e, nil
@@ -156,6 +153,7 @@ func (e *Endpoint) dialClient(hostname string) (*ricochetConn, error) {
 	rConn.hostname = hostname
 	rConn.isServer = false
 	rConn.nextChanID = 1
+	rConn.chanMap = make(map[uint16]ricochetChan)
 	go rConn.clientHandshake(d, dialHostname)
 
 	return rConn, nil
@@ -168,7 +166,7 @@ func (e *Endpoint) acceptServer(conn net.Conn) {
 	rConn.hostname = unknownHostname
 	rConn.isServer = true
 	rConn.nextChanID = 2
-
+	rConn.chanMap = make(map[uint16]ricochetChan)
 	rConn.serverHandshake()
 }
 
