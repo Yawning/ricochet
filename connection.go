@@ -24,9 +24,16 @@ import (
 )
 
 const (
+	protocolVersion      = 0x01
+	protocolVersionError = 0xff
+
+	packetHdrSize = 2 + 2
+
 	handshakeTimeout      = 30 * time.Second
 	authenticationTimeout = 30 * time.Second
 )
+
+var handshakePrefix = []byte{0x49, 0x4d}
 
 type ricochetConn struct {
 	sync.Mutex
@@ -170,7 +177,10 @@ func (c *ricochetConn) clientHandshake(d proxy.Dialer, dialHostname string) {
 	c.incomingPacketWorker()
 }
 
-func (c *ricochetConn) serverHandshake() (err error) {
+func (c *ricochetConn) serverHandshake() {
+	var err error
+	defer c.conn.Close()
+
 	log.Printf("server: new client connection")
 
 	// Arm the handshake timeout.
@@ -187,7 +197,7 @@ func (c *ricochetConn) serverHandshake() (err error) {
 	}
 	if !bytes.Equal(hsPrefix[0:2], handshakePrefix) {
 		log.Printf("server: Invalid handshake prefix")
-		return io.EOF
+		return
 	}
 	versions := make([]byte, hsPrefix[2])
 	if _, err = io.ReadFull(c.conn, versions); err != nil {
@@ -209,7 +219,7 @@ func (c *ricochetConn) serverHandshake() (err error) {
 	}
 	if respVer[0] == protocolVersionError {
 		log.Printf("server: Client speaks no compatible versions, closing")
-		return io.EOF
+		return
 	}
 
 	// Disarm the handshake timeout.
@@ -227,8 +237,6 @@ func (c *ricochetConn) serverHandshake() (err error) {
 	c.incomingPacketWorker()
 
 	// XXX: Remove from global state.
-
-	return nil
 }
 
 func (c *ricochetConn) incomingPacketWorker() {

@@ -74,8 +74,6 @@ const (
 	chatChannelType = "im.ricochet.chat"
 )
 
-var handshakePrefix = []byte{0x49, 0x4d}
-
 type EndpointConfig struct {
 	TorControlPort *bulb.Conn
 	PrivateKey     *rsa.PrivateKey
@@ -164,8 +162,6 @@ func (e *Endpoint) dialClient(hostname string) (*ricochetConn, error) {
 }
 
 func (e *Endpoint) acceptServer(conn net.Conn) {
-	defer conn.Close()
-
 	rConn := new(ricochetConn)
 	rConn.endpoint = e
 	rConn.conn = conn
