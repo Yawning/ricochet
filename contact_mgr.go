@@ -24,10 +24,11 @@ type contactMgr struct {
 
 	knownContacts   map[string]*ricochetContact
 	pendingContacts map[string]*ricochetContact
-	//unknownContacts map[string]*ricochetContact
 }
 
 type ricochetContact struct {
+	contactReq *ContactRequest
+
 	incomingConn *ricochetConn
 	outgoingConn *ricochetConn
 }
@@ -173,15 +174,19 @@ func (m *contactMgr) onOutgoingConnectionClosed(conn *ricochetConn) {
 	}
 }
 
-func newContactMgr(e *Endpoint, knownContacts []string) *contactMgr {
+func newContactMgr(e *Endpoint, knownContacts []string, pendingContacts map[string]*ContactRequest) *contactMgr {
 	m := new(contactMgr)
 	m.endpoint = e
 	m.knownContacts = make(map[string]*ricochetContact)
 	m.pendingContacts = make(map[string]*ricochetContact)
-	// m.unknownContacts = make(map[string]*ricochetContact)
 
 	for _, id := range knownContacts {
 		m.knownContacts[id] = new(ricochetContact)
+	}
+	for id, reqData := range pendingContacts {
+		c := new(ricochetContact)
+		c.contactReq = reqData
+		m.pendingContacts[id] = c
 	}
 
 	go m.outgoingConnectionWorker()
