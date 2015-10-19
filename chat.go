@@ -8,6 +8,7 @@
 package ricochet
 
 import (
+	"errors"
 	"fmt"
 	"log"
 
@@ -29,6 +30,9 @@ type chatChan struct {
 
 	isOutgoing bool
 }
+
+// ErrMessageSize is the error returned when a chat message is over the limit.
+var ErrMessageSize = errors.New("chat message too large")
 
 func (ch *chatChan) onOpenChannel() error {
 	// XXX: Check to see if this is a contact we're willing to accept.
@@ -106,6 +110,22 @@ func (ch *chatChan) sendChatAck(msgID uint32, accepted bool) error {
 }
 
 func (ch *chatChan) onClose() error {
+	ch.conn.Lock()
+	defer ch.conn.Unlock()
+	if _, ok := ch.conn.chanMap[ch.chanID]; !ok {
+		return fmt.Errorf("received duplicate chat chan close")
+	}
+	delete(ch.conn.chanMap, ch.chanID)
+	if ch.isOutgoing {
+		// Whowa, the peer closed our outgoing chat channel on us,
+		// how rude.  AFAIK the reference implementation never closes
+		// chat channels, and neither does this implementation...
+		return fmt.Errorf("peer closed our outgoing chat channel")
+	} else {
+		// Clear the incoming chat channel ID, the peer can open a new one
+		// if they desire.
+		ch.conn.getControlChan().incomingChatChan = invalidChanID
+	}
 	return nil
 }
 

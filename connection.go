@@ -292,3 +292,7 @@ func (c *ricochetConn) sendChanClose(chanID uint16) error {
 
 	return c.sendPacket(chanID, nil)
 }
+
+func (c *ricochetConn) closeConn() error {
+	return c.conn.Close()
+}

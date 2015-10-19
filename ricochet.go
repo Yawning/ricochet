@@ -60,9 +60,11 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/net/proxy"
 
+	"github.com/eapache/channels"
 	"github.com/yawning/bulb"
 	"github.com/yawning/bulb/utils/pkcs1"
 )
@@ -76,6 +78,8 @@ const (
 	unknownHostname = "<unknown>"
 	onionSuffix     = ".onion"
 	ricochetPrefix  = "ricochet:"
+
+	contactRetryDelay = 60 * time.Second
 )
 
 var ricochetHostnameMap map[rune]bool
@@ -99,6 +103,14 @@ type Endpoint struct {
 	ln         net.Listener
 
 	blacklist map[string]bool
+	contacts  map[string]*ricochetContact
+
+	outgoingQueue *channels.InfiniteChannel
+}
+
+type ricochetContact struct {
+	conn    *ricochetConn
+	reqData *ContactRequest
 }
 
 func NewEndpoint(cfg *EndpointConfig) (e *Endpoint, err error) {
@@ -110,9 +122,16 @@ func NewEndpoint(cfg *EndpointConfig) (e *Endpoint, err error) {
 	if err != nil {
 		return nil, err
 	}
+	e.outgoingQueue = channels.NewInfiniteChannel()
 	e.blacklist = make(map[string]bool)
 	for _, id := range cfg.BlacklistedContacts {
 		if err := e.BlacklistContact(id, true); err != nil {
+			return nil, err
+		}
+	}
+	e.contacts = make(map[string]*ricochetContact)
+	for _, id := range cfg.KnownContacts {
+		if err := e.AddContact(id, nil); err != nil {
 			return nil, err
 		}
 	}
@@ -125,6 +144,7 @@ func NewEndpoint(cfg *EndpointConfig) (e *Endpoint, err error) {
 	log.Printf("server: online as '%v'", e.hostname)
 
 	go e.hsAcceptWorker()
+	go e.hsConnectWorker()
 
 	return e, nil
 }
@@ -137,6 +157,10 @@ func (e *Endpoint) AddContact(hostname string, requestData *ContactRequest) erro
 	if err != nil {
 		return err
 	}
+
+	// XXX: Carve out a ricochetContact datastructure etc.
+
+	e.outgoingQueue.In() <- hostname
 
 	return nil
 }
@@ -176,6 +200,9 @@ func (e *Endpoint) SendMsg(hostname, message string) error {
 	if err != nil {
 		return err
 	}
+	if len(message) > MessageMaxCharacters {
+		return ErrMessageSize
+	}
 
 	return nil
 }
@@ -192,6 +219,33 @@ func (e *Endpoint) hsAcceptWorker() {
 			continue
 		}
 		go e.acceptServer(conn)
+	}
+}
+
+func (e *Endpoint) hsConnectWorker() {
+	connectCh := e.outgoingQueue.Out()
+	for {
+		// Grab the hostname out of the queue of outgoing peers to contact.
+		v, ok := <-connectCh
+		if !ok {
+			// Must have closed the endpoint, bail out.
+			break
+		}
+		hostname := v.(string)
+
+		// XXX: Ensure that there is no connection to the peer already.
+
+		conn, err := e.dialClient(hostname)
+		if err != nil {
+			// Failed to dial the client, retry after a reasonable delay.
+			reAddContact := func() {
+				e.outgoingQueue.In() <- hostname
+			}
+			time.AfterFunc(contactRetryDelay, reAddContact)
+			continue
+		}
+		// Do something with the connection.
+		_ = conn
 	}
 }
 

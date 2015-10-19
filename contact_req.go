@@ -10,6 +10,7 @@ package ricochet
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log"
 
 	"github.com/golang/protobuf/proto"
@@ -145,6 +146,11 @@ func (ch *contactReqChan) onClose() error {
 	delete(ch.conn.chanMap, ch.chanID)
 	// Explicitly do not clear controlChan's contactReqChan field, since there
 	// is only one ContactRequest channel ever per connection.
+	if ch.state != chanStateDone {
+		// Peer closed the channel before sending a response...
+		// XXX: Treat this as a reject?
+		return io.EOF
+	}
 	return nil
 }
 
