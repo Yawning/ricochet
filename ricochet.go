@@ -95,6 +95,8 @@ type EndpointConfig struct {
 type Endpoint struct {
 	sync.Mutex
 
+	IncomingMsgChan chan *IncomingMessage
+
 	hostname string
 
 	privateKey *rsa.PrivateKey
@@ -105,12 +107,18 @@ type Endpoint struct {
 	blacklist map[string]bool
 	contacts  map[string]*ricochetContact
 
-	outgoingQueue *channels.InfiniteChannel
+	outgoingQueue    *channels.InfiniteChannel
+	incomingMsgQueue *channels.InfiniteChannel
+}
+
+type IncomingMessage struct {
+	From string
+	Body string
 }
 
 type ricochetContact struct {
-	conn    *ricochetConn
-	reqData *ContactRequest
+	conn        *ricochetConn
+	requestData *ContactRequest
 }
 
 func NewEndpoint(cfg *EndpointConfig) (e *Endpoint, err error) {
@@ -123,6 +131,9 @@ func NewEndpoint(cfg *EndpointConfig) (e *Endpoint, err error) {
 		return nil, err
 	}
 	e.outgoingQueue = channels.NewInfiniteChannel()
+	e.incomingMsgQueue = channels.NewInfiniteChannel()
+	e.IncomingMsgChan = make(chan *IncomingMessage)
+
 	e.blacklist = make(map[string]bool)
 	for _, id := range cfg.BlacklistedContacts {
 		if err := e.BlacklistContact(id, true); err != nil {
@@ -145,6 +156,7 @@ func NewEndpoint(cfg *EndpointConfig) (e *Endpoint, err error) {
 
 	go e.hsAcceptWorker()
 	go e.hsConnectWorker()
+	go e.incomingMsgWorker()
 
 	return e, nil
 }
@@ -157,11 +169,17 @@ func (e *Endpoint) AddContact(hostname string, requestData *ContactRequest) erro
 	if err != nil {
 		return err
 	}
+	if contact := e.contacts[hostname]; contact != nil {
+		// XXX: This is either us accepting a remote peer's request,
+		// or caller error.
+		return nil
+	}
 
-	// XXX: Carve out a ricochetContact datastructure etc.
-
+	// Add to our map of known peers, and schedule a connect.
+	contact := new(ricochetContact)
+	contact.requestData = requestData
+	e.contacts[hostname] = contact
 	e.outgoingQueue.In() <- hostname
-
 	return nil
 }
 
@@ -225,27 +243,46 @@ func (e *Endpoint) hsAcceptWorker() {
 func (e *Endpoint) hsConnectWorker() {
 	connectCh := e.outgoingQueue.Out()
 	for {
+		var err error
+
 		// Grab the hostname out of the queue of outgoing peers to contact.
 		v, ok := <-connectCh
 		if !ok {
-			// Must have closed the endpoint, bail out.
 			break
 		}
 		hostname := v.(string)
 
-		// XXX: Ensure that there is no connection to the peer already.
-
-		conn, err := e.dialClient(hostname)
+		e.Lock()
+		contact := e.contacts[hostname]
+		if contact == nil || contact.conn != nil {
+			// No longer exists, or there is a connection already.
+			e.Unlock()
+			continue
+		}
+		contact.conn, err = e.dialClient(hostname)
+		e.Unlock()
 		if err != nil {
-			// Failed to dial the client, retry after a reasonable delay.
+			// Failed to prepare to dial the client, retry after a delay.
+			// delay.
 			reAddContact := func() {
 				e.outgoingQueue.In() <- hostname
 			}
 			time.AfterFunc(contactRetryDelay, reAddContact)
 			continue
 		}
-		// Do something with the connection.
-		_ = conn
+	}
+}
+
+func (e *Endpoint) incomingMsgWorker() {
+	// Abuse a go routine to save the caller from having to include a type
+	// assertion.  Sort of silly, but who cares.
+	msgCh := e.incomingMsgQueue.Out()
+	for {
+		msg, ok := <-msgCh
+		if !ok {
+			break
+		}
+		e.IncomingMsgChan <- msg.(*IncomingMessage)
 	}
 }
 
@@ -289,6 +326,58 @@ func (e *Endpoint) isBlacklisted(hostname string) bool {
 	defer e.Unlock()
 
 	return e.blacklist[hostname]
+}
+
+func (e *Endpoint) onConnectionClosed(conn *ricochetConn) {
+	// Inbound connection from unknown peer, do nothing.
+	if conn.hostname == unknownHostname {
+		return
+	}
+
+	e.Lock()
+	defer e.Unlock()
+
+	// If we still care about the peer...
+	contact := e.contacts[conn.hostname]
+	if contact == nil {
+		return
+	}
+
+	// And this was the active connectio to the peer...
+	if contact.conn == conn {
+		// The contact no longer has a connection.
+		contact.conn = nil
+
+		// XXX: Notify caller that the peer is offline.
+
+		// Schedule a reconnect.
+		e.outgoingQueue.In() <- conn.hostname
+	}
+}
+
+func (e *Endpoint) onRemoteReject(hostname string) {
+	e.Lock()
+	defer e.Unlock()
+
+	// If we still care about the peer...
+	contact := e.contacts[hostname]
+	if contact == nil {
+		return
+	}
+	delete(e.contacts, hostname)
+	if contact.requestData == nil {
+		// XXX: Notify caller that peer removed us.
+	} else {
+		// XXX: Notify caller that peer rejected us.
+	}
+}
+
+func (e *Endpoint) onMessageReceived(hostname, messageBody string) {
+	msg := new(IncomingMessage)
+	msg.From = hostname
+	msg.Body = messageBody
+
+	e.incomingMsgQueue.In() <- msg
 }
 
 func normalizeHostname(hostname string) (string, error) {

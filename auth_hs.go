@@ -124,7 +124,7 @@ func (ch *authHSChan) onPacketClient(authPkt *packet.AuthHSPacket) error {
 		return fmt.Errorf("missing result")
 	}
 	if !resultMsg.GetAccepted() {
-		// XXX: Notify the endpoint that the peer explicitly rejected auth.
+		ch.conn.endpoint.onRemoteReject(ch.conn.hostname)
 		return fmt.Errorf("client: auth to '%s' rejected", ch.conn.hostname)
 	}
 

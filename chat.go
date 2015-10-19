@@ -78,9 +78,10 @@ func (ch *chatChan) onPacket(rawPkt []byte) (err error) {
 			accepted = false
 		}
 
-		// XXX: Deliver the chat message to the caller.
+		// Deliver the chat message to the caller.
 		if accepted {
 			log.Printf("[%v]: %v:%v '%v'", ch.conn.hostname, msgID, deltaT, msgText)
+			ch.conn.endpoint.onMessageReceived(ch.conn.hostname, msgText)
 		}
 
 		// Ack the packet.

@@ -126,10 +126,9 @@ func (ch *contactReqChan) onResponse(resp *packet.ContactRequestResponse) error 
 		// code.
 	case packet.ContactRequestResponse_Rejected:
 		log.Printf("client: server '%s' rejected contact request", ch.conn.hostname)
-		// XXX: Mark peer as rejected.
+		ch.conn.endpoint.onRemoteReject(ch.conn.hostname)
 		return fmt.Errorf("contact request rejected by peer")
 	case packet.ContactRequestResponse_Error:
-		// XXX: Mark peer as having issues, reschedule connection.
 		return errContactRequestAgain
 	default:
 		return fmt.Errorf("unknown ContactRequest Status")

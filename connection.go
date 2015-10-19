@@ -127,7 +127,7 @@ func (c *ricochetConn) clientHandshake(d proxy.Dialer, dialHostname string) {
 		if c.conn != nil {
 			c.conn.Close()
 		}
-		// XXX: Notify endpoint that the connection was closed.
+		c.endpoint.onConnectionClosed(c)
 	}()
 
 	// Open the connection to the remote HS.
@@ -188,7 +188,7 @@ func (c *ricochetConn) serverHandshake() {
 	var err error
 	defer func() {
 		c.conn.Close()
-		// XXX: Notify endpoint that the connection was closed.
+		c.endpoint.onConnectionClosed(c)
 	}()
 
 	log.Printf("server: new client connection")
