@@ -39,24 +39,16 @@ func (req *ContactRequest) String() string {
 	return fmt.Sprintf("'%v':'%v'", req.MyNickname, req.Message)
 }
 
-type contactReqChanState int
-
-const (
-	contactReqChanStateOpening contactReqChanState = iota
-	contactReqChanStateOpen
-	contactReqChanStateDone
-)
-
 type contactReqChan struct {
 	conn   *ricochetConn
 	chanID uint16
-	state  contactReqChanState
+	state  chanState
 
 	reqData *ContactRequest
 }
 
 func (ch *contactReqChan) onOpenChannel() error {
-	ch.state = contactReqChanStateOpen
+	ch.state = chanStateOpen
 
 	// Stop the timer since the peer took sufficient action.
 	ch.conn.authTimer.Stop()
@@ -85,10 +77,10 @@ func (ch *contactReqChan) onChannelResult(msg *packet.ChannelResult) error {
 	if ch.conn.isServer {
 		return fmt.Errorf("opened contact req channel to client")
 	}
-	if ch.state != contactReqChanStateOpening {
+	if ch.state != chanStateOpening {
 		return fmt.Errorf("received spurious ContactRequest ChannelResult")
 	}
-	ch.state = contactReqChanStateOpen
+	ch.state = chanStateOpen
 
 	// If this routine was called, the channel WAS opened, without incident.
 	// Extract the response, and take action accordingly.
@@ -104,7 +96,7 @@ func (ch *contactReqChan) onPacket(rawPkt []byte) error {
 	if ch.conn.isServer {
 		return fmt.Errorf("received contact req packet from client")
 	}
-	if ch.state != contactReqChanStateOpen {
+	if ch.state != chanStateOpen {
 		return fmt.Errorf("received contact req packet after completion")
 	}
 
@@ -124,12 +116,13 @@ func (ch *contactReqChan) onResponse(resp *packet.ContactRequestResponse) error 
 		// Accepted.
 		log.Printf("client: server '%s' accepted contact request", ch.conn.hostname)
 		ch.conn.getControlChan().isKnownToPeer = true
+		ch.state = chanStateDone
+
 		// XXX: Mark peer online.
 		// XXX: Send a channel close?  This is likewise something the server
 		// ought to be doing, so don't bother for now.  This code will not use
 		// the channel past this point, apart from processing the server's
 		// code.
-		ch.state = contactReqChanStateDone
 	case packet.ContactRequestResponse_Rejected:
 		log.Printf("client: server '%s' rejected contact request", ch.conn.hostname)
 		// XXX: Mark peer as rejected.
@@ -159,11 +152,11 @@ func (ch *contactReqChan) sendContactReqResponse(accepted bool) error {
 	if !ch.conn.isServer {
 		return fmt.Errorf("attempted to send contact request response from server")
 	}
-	if ch.state != contactReqChanStateOpen {
+	if ch.state != chanStateOpen {
 		return fmt.Errorf("attempted to send contact request response when closed")
 	}
 
-	ch.state = contactReqChanStateDone
+	ch.state = chanStateDone
 	resp := &packet.ContactRequestResponse{}
 	if accepted {
 		resp.Status = packet.ContactRequestResponse_Accepted.Enum()

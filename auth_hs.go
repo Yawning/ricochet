@@ -29,25 +29,17 @@ const (
 	authHiddenServicePublicKeyBits = PublicKeyBits
 )
 
-type authChanState int
-
-const (
-	authChanStateOpening authChanState = iota
-	authChanStateOpen
-	authChanStateDone
-)
-
 type authHSChan struct {
 	conn   *ricochetConn
 	chanID uint16
-	state  authChanState
+	state  chanState
 
 	clientCookie []byte
 	serverCookie []byte
 }
 
 func (ch *authHSChan) onOpenChannel() error {
-	ch.state = authChanStateOpen
+	ch.state = chanStateOpen
 	ch.serverCookie = make([]byte, authHiddenServiceCookieSize)
 	if _, err := rand.Read(ch.serverCookie); err != nil {
 		return err
@@ -72,10 +64,10 @@ func (ch *authHSChan) onChannelResult(msg *packet.ChannelResult) error {
 	if ch.conn.isServer {
 		return fmt.Errorf("opened auth channel to client")
 	}
-	if ch.state != authChanStateOpening {
+	if ch.state != chanStateOpening {
 		return fmt.Errorf("received spurious AuthHiddenService ChannelResult")
 	}
-	ch.state = authChanStateOpen
+	ch.state = chanStateOpen
 
 	// If this routine was called, the channel WAS opened, without incident.
 	// Extract the server cookie, and send the proof.
@@ -107,10 +99,10 @@ func (ch *authHSChan) onChannelResult(msg *packet.ChannelResult) error {
 }
 
 func (ch *authHSChan) onPacket(rawPkt []byte) error {
-	if ch.state != authChanStateOpen {
+	if ch.state != chanStateOpen {
 		return fmt.Errorf("received AuthHiddenService packet after auth")
 	}
-	ch.state = authChanStateDone // Only get one packet.
+	ch.state = chanStateDone // Only get one packet.
 
 	var authPkt packet.AuthHSPacket
 	if err := proto.Unmarshal(rawPkt, &authPkt); err != nil {
@@ -199,6 +191,7 @@ func (ch *authHSChan) onPacketServer(authPkt *packet.AuthHSPacket) error {
 			ch.conn.getControlChan().isKnownToPeer = true
 			ch.conn.hostname = clientHostname
 			// XXX: Query the endpoint for known status.
+			isKnown = true // XXX: HACKAHACKAHACK
 
 			if isKnown {
 				// Known peer, connection is established.
@@ -244,7 +237,7 @@ func (ch *authHSChan) onClose() error {
 	delete(ch.conn.chanMap, ch.chanID)
 	// Explicitly do not clear controlChan's authChan field, since there is
 	// only one auth channel ever per connection.
-	if ch.state != authChanStateDone {
+	if ch.state != chanStateDone {
 		// Peer refused to open/closed the channel before completing auth.
 		return io.EOF
 	}

@@ -26,6 +26,14 @@ const (
 	keepAliveMinInterval = 30 * time.Second
 )
 
+type chanState int
+
+const (
+	chanStateOpening = iota
+	chanStateOpen
+	chanStateDone
+)
+
 type controlChan struct {
 	conn *ricochetConn
 
