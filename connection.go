@@ -67,10 +67,13 @@ func (c *ricochetConn) nextPacket() (uint16, []byte, error) {
 	}
 	pktSize := binary.BigEndian.Uint16(pktHdr[0:])
 	pktChan := binary.BigEndian.Uint16(pktHdr[2:])
-	if pktSize <= pktHdrSize {
-		// XXX: Technically this should reject 1/2/3 byte sizes instead of
-		// treating them as a channel close.
+	switch pktSize {
+	case 0, 1, 2, 3:
+		return 0, nil, fmt.Errorf("invalid pkt size: %v", pktSize)
+	case pktHdrSize:
+		// A channel close is a frame to the channel with 0 bytes of data.
 		return pktChan, nil, io.EOF
+	default:
 	}
 	pktSize -= pktHdrSize
 	pktData := make([]byte, pktSize)
