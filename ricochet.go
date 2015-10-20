@@ -215,10 +215,18 @@ func (e *Endpoint) AddContact(hostname string, requestData *ContactRequest) erro
 		delete(e.pendingContacts, hostname)
 		contact.requestData = requestData
 		e.contacts[hostname] = contact
-		if contact.conn == nil {
-			e.outgoingQueue.In() <- hostname
+		if contact.conn != nil {
+			// Send the accept if possible.  If not, the right
+			// thing will happen as part of connection teardown.
+			if ch := contact.conn.getContactRequestChan(); ch != nil {
+				if err := ch.sendContactReqResponse(true); err == nil {
+					e.onContactStateChange(contact, hostname, ContactStateOnline)
+				}
+				return nil
+			}
 		} else {
-			// XXX: Accept the contact request, and mark peer online.
+			// No connection to peer, schedule one.
+			e.outgoingQueue.In() <- hostname
 		}
 		return nil
 	}
@@ -529,8 +537,12 @@ func (e *Endpoint) removeAndCloseConnLocked(hostname string) {
 		delete(e.contacts, hostname)
 	}
 	if contact.conn != nil {
+		// Send a rejection.  Failures are harmless since the conn is
+		// getting closed anyway.
 		if wasPending {
-			// XXX: Send a rejection.
+			if ch := contact.conn.getContactRequestChan(); ch != nil {
+				ch.sendContactReqResponse(false)
+			}
 		}
 		contact.conn.closeConn()
 	}
