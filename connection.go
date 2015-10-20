@@ -47,7 +47,7 @@ type ricochetConn struct {
 
 	isServer      bool
 	shouldClose   bool
-	isEstablished bool
+	establishedAt time.Time
 
 	nextChanID uint16
 }
@@ -305,18 +305,18 @@ func (c *ricochetConn) sendChanClose(chanID uint16) error {
 	return c.sendPacket(chanID, nil)
 }
 
-func (c *ricochetConn) isConnEstablished() bool {
+func (c *ricochetConn) getEstablished() time.Time {
 	c.Lock()
 	defer c.Unlock()
 
-	return c.isEstablished
+	return c.establishedAt
 }
 
-func (c *ricochetConn) setConnEstablished() {
+func (c *ricochetConn) setEstablished() {
 	c.Lock()
 	defer c.Unlock()
 
-	c.isEstablished = true
+	c.establishedAt = time.Now()
 }
 
 func (c *ricochetConn) closeConn() error {

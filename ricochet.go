@@ -407,7 +407,7 @@ func (e *Endpoint) onConnectionEstablished(conn *ricochetConn) {
 
 	// If we still care about the peer...
 	if contact := e.contacts[conn.hostname]; contact != nil {
-		contact.updateConn(conn)
+		contact.updateConnLocked(conn)
 		e.onContactStateChange(contact, conn.hostname, ContactStateOnline)
 	} else {
 		// User must have removed it while the connection was in
@@ -536,7 +536,9 @@ func (e *Endpoint) removeAndCloseConnLocked(hostname string) {
 	}
 }
 
-func (contact *ricochetContact) updateConn(conn *ricochetConn) {
+func (contact *ricochetContact) updateConnLocked(conn *ricochetConn) {
+	// e.Lock() should be held at this point.
+
 	// If the connection already is set, do nothing.
 	if contact.conn == conn {
 		return
@@ -549,7 +551,9 @@ func (contact *ricochetContact) updateConn(conn *ricochetConn) {
 	}
 
 	// If the old connection isn't established yet, new one wins.
-	if !contact.conn.isConnEstablished() {
+	establishedAt := contact.conn.getEstablished()
+	if establishedAt.Equal(time.Time{}) {
+		log.Printf("[%v]: old connection is not established, new wins")
 		contact.conn.closeConn()
 		contact.conn = conn
 		return
@@ -563,13 +567,20 @@ func (contact *ricochetContact) updateConn(conn *ricochetConn) {
 	// same peers in the same positions (direction is the same),
 	// favor the new one.
 	if contact.conn.isServer == conn.isServer {
+		log.Printf("[%v]: both connections in same direction, new wins")
 		contact.conn.closeConn()
 		contact.conn = conn
 		return
 	}
 
-	// XXX: If the old connection is more than 30 sec old, since when it was
+	// If the old connection is more than 30 sec old, since when it was
 	// fully established, prefer the new connection.
+	if establishedAt.Add(30 * time.Second).Before(time.Now()) {
+		log.Printf("[%v]: old conn over 30 sec old, new wins")
+		contact.conn.closeConn()
+		contact.conn = conn
+		return
+	}
 
 	// Tiebreak with strcmp based on digetests.
 	preferOutbound := conn.hostname < conn.endpoint.hostname
