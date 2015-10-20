@@ -80,6 +80,7 @@ const (
 	onionSuffix     = ".onion"
 	ricochetPrefix  = "ricochet:"
 
+	reconnectDelay    = 15 * time.Second
 	contactRetryDelay = 60 * time.Second
 )
 
@@ -158,6 +159,7 @@ func NewEndpoint(cfg *EndpointConfig) (e *Endpoint, err error) {
 	}
 	e.outgoingQueue = channels.NewInfiniteChannel()
 	e.incomingMsgQueue = channels.NewInfiniteChannel()
+	e.contactStateQueue = channels.NewInfiniteChannel()
 	e.pendingContacts = make(map[string]*ricochetContact)
 
 	e.IncomingMsgChan = make(chan *IncomingMessage)
@@ -312,10 +314,7 @@ func (e *Endpoint) hsConnectWorker() {
 		if err != nil {
 			// Failed to prepare to dial the client, retry after a delay.
 			// delay.
-			reAddContact := func() {
-				e.outgoingQueue.In() <- hostname
-			}
-			time.AfterFunc(contactRetryDelay, reAddContact)
+			time.AfterFunc(contactRetryDelay, func() { e.outgoingQueue.In() <- hostname })
 			continue
 		}
 	}
@@ -434,7 +433,7 @@ func (e *Endpoint) onConnectionClosed(conn *ricochetConn) {
 			contact.conn = nil
 
 			e.onContactStateChange(contact, conn.hostname, ContactStateOffline)
-			e.outgoingQueue.In() <- conn.hostname
+			time.AfterFunc(reconnectDelay, func() { e.outgoingQueue.In() <- conn.hostname })
 		}
 	} else if contact := e.pendingContacts[conn.hostname]; contact != nil {
 		// If this was a contact request from a peer pending approval...
@@ -549,7 +548,12 @@ func (contact *ricochetContact) updateConn(conn *ricochetConn) {
 		return
 	}
 
-	// XXX: If the old connection isn't established yet, new one wins.
+	// If the old connection isn't established yet, new one wins.
+	if !contact.conn.isConnEstablished() {
+		contact.conn.closeConn()
+		contact.conn = conn
+		return
+	}
 
 	//
 	// Taken from `ContactUser::assignConnection(Protocol::Connection)`
@@ -570,8 +574,10 @@ func (contact *ricochetContact) updateConn(conn *ricochetConn) {
 	// Tiebreak with strcmp based on digetests.
 	preferOutbound := conn.hostname < conn.endpoint.hostname
 	if !contact.conn.isServer && preferOutbound {
+		log.Printf("[%v]: old connection won tiebreak", conn.hostname)
 		conn.closeConn()
 	} else {
+		log.Printf("[%v]: new connection won tiebreak", conn.hostname)
 		contact.conn.closeConn()
 		contact.conn = conn
 	}

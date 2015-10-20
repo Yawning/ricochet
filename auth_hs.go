@@ -134,6 +134,7 @@ func (ch *authHSChan) onPacketClient(authPkt *packet.AuthHSPacket) error {
 	ch.conn.getControlChan().isAuthenticated = true
 	ch.conn.getControlChan().isKnownToPeer = isKnown
 	ch.conn.authTimer.Stop() // Stop the fuck().
+	ch.conn.setConnEstablished()
 
 	// XXX: Send a channel close?  This is something the server ought to be
 	// doing, so don't bother for now.  This code will not use this channel
@@ -215,6 +216,7 @@ func (ch *authHSChan) onPacketServer(authPkt *packet.AuthHSPacket) error {
 	}
 
 	if sigOk {
+		ch.conn.setConnEstablished()
 		if isKnown {
 			ch.conn.authTimer.Stop()
 			ch.conn.endpoint.onConnectionEstablished(ch.conn)

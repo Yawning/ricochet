@@ -45,7 +45,10 @@ type ricochetConn struct {
 	chanMap   map[uint16]ricochetChan
 	authTimer *time.Timer
 
-	isServer   bool
+	isServer      bool
+	shouldClose   bool
+	isEstablished bool
+
 	nextChanID uint16
 }
 
@@ -131,11 +134,20 @@ func (c *ricochetConn) clientHandshake(d proxy.Dialer, dialHostname string) {
 	}()
 
 	// Open the connection to the remote HS.
-	c.conn, err = d.Dial("tcp", dialHostname)
+	var conn net.Conn
+	conn, err = d.Dial("tcp", dialHostname)
 	if err != nil {
 		log.Printf("client: Failed to connect to '%v' : %v", dialHostname, err)
 		return
 	}
+	c.Lock()
+	if c.shouldClose {
+		conn.Close()
+		c.Unlock()
+		return
+	}
+	c.conn = conn
+	c.Unlock()
 
 	// Arm the handshake timeout.
 	if err := c.conn.SetDeadline(time.Now().Add(handshakeTimeout)); err != nil {
@@ -293,6 +305,27 @@ func (c *ricochetConn) sendChanClose(chanID uint16) error {
 	return c.sendPacket(chanID, nil)
 }
 
+func (c *ricochetConn) isConnEstablished() bool {
+	c.Lock()
+	defer c.Unlock()
+
+	return c.isEstablished
+}
+
+func (c *ricochetConn) setConnEstablished() {
+	c.Lock()
+	defer c.Unlock()
+
+	c.isEstablished = true
+}
+
 func (c *ricochetConn) closeConn() error {
-	return c.conn.Close()
+	c.Lock()
+	defer c.Unlock()
+
+	c.shouldClose = true
+	if c.conn != nil {
+		return c.conn.Close()
+	}
+	return nil
 }
