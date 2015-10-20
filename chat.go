@@ -35,10 +35,14 @@ type chatChan struct {
 var ErrMessageSize = errors.New("chat message too large")
 
 func (ch *chatChan) onOpenChannel() error {
-	// XXX: Check to see if this is a contact we're willing to accept.
-	if !ch.conn.getControlChan().isKnownToPeer {
-		// The peer is allowed to open a chat channel instead of making a
-		// contact request response to signal acceptance. FML.
+	if !ch.conn.isServer && !ch.conn.getControlChan().isKnownToPeer {
+		// XXX: The peer is allowed to open a chat channel instead of sending
+		// a contact request response to signal acceptance. FML.
+		return fmt.Errorf("BUG: Implicit ContactRequestResponse unsupported")
+	} else if ch.conn.isServer && !ch.conn.endpoint.isKnown(ch.conn.hostname) {
+		// WTF.  The client decided to open up a chat channel when it
+		// should be requesting to be added as a contact.
+		return fmt.Errorf("client opened chat channel pre-ContactRequest")
 	}
 
 	chanResult := &packet.ChannelResult{
@@ -122,11 +126,11 @@ func (ch *chatChan) onClose() error {
 		// how rude.  AFAIK the reference implementation never closes
 		// chat channels, and neither does this implementation...
 		return fmt.Errorf("peer closed our outgoing chat channel")
-	} else {
-		// Clear the incoming chat channel ID, the peer can open a new one
-		// if they desire.
-		ch.conn.getControlChan().incomingChatChan = invalidChanID
 	}
+
+	// Clear the incoming chat channel ID, the peer can open a new one
+	// if they desire.
+	ch.conn.getControlChan().incomingChatChan = invalidChanID
 	return nil
 }
 
