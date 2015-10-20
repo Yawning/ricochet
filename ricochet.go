@@ -55,6 +55,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -82,7 +83,12 @@ const (
 	contactRetryDelay = 60 * time.Second
 )
 
-var ricochetHostnameMap map[rune]bool
+var (
+	ErrAlreadyExists = errors.New("contact already exists")
+	ErrNoSuchContact = errors.New("no such contact")
+
+	ricochetHostnameMap map[rune]bool
+)
 
 type EndpointConfig struct {
 	TorControlPort *bulb.Conn
@@ -90,6 +96,7 @@ type EndpointConfig struct {
 
 	KnownContacts       []string
 	BlacklistedContacts []string
+	PendingContacts     map[string]*ContactRequest
 }
 
 type Endpoint struct {
@@ -104,11 +111,13 @@ type Endpoint struct {
 	isoBase    *proxy.Auth
 	ln         net.Listener
 
-	blacklist map[string]bool
-	contacts  map[string]*ricochetContact
+	blacklist       map[string]bool
+	contacts        map[string]*ricochetContact
+	pendingContacts map[string]*ricochetContact
 
-	outgoingQueue    *channels.InfiniteChannel
-	incomingMsgQueue *channels.InfiniteChannel
+	outgoingQueue        *channels.InfiniteChannel
+	incomingMsgQueue     *channels.InfiniteChannel
+	incomingContactQueue *channels.InfiniteChannel
 }
 
 type IncomingMessage struct {
@@ -132,6 +141,9 @@ func NewEndpoint(cfg *EndpointConfig) (e *Endpoint, err error) {
 	}
 	e.outgoingQueue = channels.NewInfiniteChannel()
 	e.incomingMsgQueue = channels.NewInfiniteChannel()
+	e.incomingContactQueue = channels.NewInfiniteChannel()
+	e.pendingContacts = make(map[string]*ricochetContact)
+
 	e.IncomingMsgChan = make(chan *IncomingMessage)
 
 	e.blacklist = make(map[string]bool)
@@ -143,6 +155,11 @@ func NewEndpoint(cfg *EndpointConfig) (e *Endpoint, err error) {
 	e.contacts = make(map[string]*ricochetContact)
 	for _, id := range cfg.KnownContacts {
 		if err := e.AddContact(id, nil); err != nil {
+			return nil, err
+		}
+	}
+	for id, requestData := range cfg.PendingContacts {
+		if err := e.AddContact(id, requestData); err != nil {
 			return nil, err
 		}
 	}
@@ -162,16 +179,27 @@ func NewEndpoint(cfg *EndpointConfig) (e *Endpoint, err error) {
 }
 
 func (e *Endpoint) AddContact(hostname string, requestData *ContactRequest) error {
-	e.Lock()
-	defer e.Unlock()
-
 	hostname, err := normalizeHostname(hostname)
 	if err != nil {
 		return err
 	}
+
+	e.Lock()
+	defer e.Unlock()
 	if contact := e.contacts[hostname]; contact != nil {
-		// XXX: This is either us accepting a remote peer's request,
-		// or caller error.
+		return ErrAlreadyExists
+	}
+	if contact := e.pendingContacts[hostname]; contact != nil {
+		// Treat adds when the peer has sent us a ContactRequest
+		// as accepting said request.
+		delete(e.pendingContacts, hostname)
+		contact.requestData = requestData
+		e.contacts[hostname] = contact
+		if contact.conn == nil {
+			e.outgoingQueue.In() <- hostname
+		} else {
+			// XXX: Accept the contact request, and mark peer online.
+		}
 		return nil
 	}
 
@@ -184,17 +212,16 @@ func (e *Endpoint) AddContact(hostname string, requestData *ContactRequest) erro
 }
 
 func (e *Endpoint) BlacklistContact(hostname string, set bool) error {
-	e.Lock()
-	defer e.Unlock()
-
 	hostname, err := normalizeHostname(hostname)
 	if err != nil {
 		return err
 	}
 
+	e.Lock()
+	defer e.Unlock()
 	if set {
 		e.blacklist[hostname] = true
-		// XXX: Kill any pending connections to that peer.
+		e.removeAndCloseConnLocked(hostname)
 	} else {
 		delete(e.blacklist, hostname)
 	}
@@ -202,14 +229,15 @@ func (e *Endpoint) BlacklistContact(hostname string, set bool) error {
 }
 
 func (e *Endpoint) RemoveContact(hostname string) error {
-	e.Lock()
-	defer e.Unlock()
-
 	hostname, err := normalizeHostname(hostname)
 	if err != nil {
 		return err
 	}
 
+	e.Lock()
+	defer e.Unlock()
+
+	e.removeAndCloseConnLocked(hostname)
 	return nil
 }
 
@@ -221,6 +249,8 @@ func (e *Endpoint) SendMsg(hostname, message string) error {
 	if len(message) > MessageMaxCharacters {
 		return ErrMessageSize
 	}
+
+	// XXX: Send the message.
 
 	return nil
 }
@@ -321,11 +351,44 @@ func (e *Endpoint) acceptServer(conn net.Conn) {
 	rConn.serverHandshake()
 }
 
+func (e *Endpoint) isKnown(hostname string) bool {
+	e.Lock()
+	defer e.Unlock()
+
+	return e.contacts[hostname] != nil
+}
+
 func (e *Endpoint) isBlacklisted(hostname string) bool {
 	e.Lock()
 	defer e.Unlock()
 
 	return e.blacklist[hostname]
+}
+
+func (e *Endpoint) requestData(hostname string) *ContactRequest {
+	e.Lock()
+	defer e.Unlock()
+
+	if contact := e.contacts[hostname]; contact != nil {
+		return contact.requestData
+	}
+	return nil
+}
+
+func (e *Endpoint) onConnectionEstablished(conn *ricochetConn) {
+	e.Lock()
+	defer e.Unlock()
+
+	// If we still care about the peer...
+	if contact := e.contacts[conn.hostname]; contact != nil {
+		contact.updateConn(conn)
+
+		// XXX: Notify caller that peer is online.
+	} else {
+		// User must have removed it while the connection was in
+		// progress.  Close the connection.
+		conn.closeConn()
+	}
 }
 
 func (e *Endpoint) onConnectionClosed(conn *ricochetConn) {
@@ -338,20 +401,23 @@ func (e *Endpoint) onConnectionClosed(conn *ricochetConn) {
 	defer e.Unlock()
 
 	// If we still care about the peer...
-	contact := e.contacts[conn.hostname]
-	if contact == nil {
-		return
-	}
+	if contact := e.contacts[conn.hostname]; contact != nil {
+		// And this was the active connection to the peer...
+		if contact.conn == conn {
+			// The contact no longer has a connection.
+			contact.conn = nil
 
-	// And this was the active connectio to the peer...
-	if contact.conn == conn {
-		// The contact no longer has a connection.
-		contact.conn = nil
+			// XXX: Notify caller that the peer is offline.
 
-		// XXX: Notify caller that the peer is offline.
-
-		// Schedule a reconnect.
-		e.outgoingQueue.In() <- conn.hostname
+			// Schedule a reconnect.
+			e.outgoingQueue.In() <- conn.hostname
+		}
+	} else if contact := e.pendingContacts[conn.hostname]; contact != nil {
+		// If this was a contact request from a peer pending approval...
+		if contact.conn == conn {
+			// Remove the connection, but do not remove the data structure.
+			contact.conn = nil
+		}
 	}
 }
 
@@ -378,6 +444,69 @@ func (e *Endpoint) onMessageReceived(hostname, messageBody string) {
 	msg.Body = messageBody
 
 	e.incomingMsgQueue.In() <- msg
+}
+
+func (e *Endpoint) removeAndCloseConnLocked(hostname string) {
+	// e.Lock() should be held at this point.
+
+	wasPending := false
+	contact := e.contacts[hostname]
+	if contact == nil {
+		contact = e.pendingContacts[hostname]
+		if contact == nil {
+			return
+		}
+		delete(e.pendingContacts, hostname)
+		wasPending = true
+	} else {
+		delete(e.contacts, hostname)
+	}
+	if contact.conn != nil {
+		if wasPending {
+			// XXX: Send a rejection.
+		}
+		contact.conn.closeConn()
+	}
+}
+
+func (contact *ricochetContact) updateConn(conn *ricochetConn) {
+	// If the connection already is set, do nothing.
+	if contact.conn == conn {
+		return
+	}
+
+	// If there is no connection, just set it.
+	if contact.conn == nil {
+		contact.conn = conn
+		return
+	}
+
+	// XXX: If the old connection isn't established yet, new one wins.
+
+	//
+	// Taken from `ContactUser::assignConnection(Protocol::Connection)`
+	//
+
+	// If the new connection and the existing connection have the
+	// same peers in the same positions (direction is the same),
+	// favor the new one.
+	if contact.conn.isServer == conn.isServer {
+		contact.conn.closeConn()
+		contact.conn = conn
+		return
+	}
+
+	// XXX: If the old connection is more than 30 sec old, since when it was
+	// fully established, prefer the new connection.
+
+	// Tiebreak with strcmp based on digetests.
+	preferOutbound := conn.hostname < conn.endpoint.hostname
+	if !contact.conn.isServer && preferOutbound {
+		conn.closeConn()
+	} else {
+		contact.conn.closeConn()
+		contact.conn = conn
+	}
 }
 
 func normalizeHostname(hostname string) (string, error) {

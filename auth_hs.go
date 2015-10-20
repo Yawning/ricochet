@@ -134,13 +134,24 @@ func (ch *authHSChan) onPacketClient(authPkt *packet.AuthHSPacket) error {
 	ch.conn.getControlChan().isAuthenticated = true
 	ch.conn.getControlChan().isKnownToPeer = isKnown
 	ch.conn.authTimer.Stop() // Stop the fuck().
-	// XXX: Notify endpoint that the connection was authenticated.
 
 	// XXX: Send a channel close?  This is something the server ought to be
 	// doing, so don't bother for now.  This code will not use this channel
 	// past this point, apart from processing the server's close.
 
-	return nil
+	if isKnown {
+		ch.conn.endpoint.onConnectionEstablished(ch.conn)
+		return nil
+	}
+
+	// The peer doesn't immediately recognize us. If this is expected,
+	// dispatch a ContactRequest, otherwise, we got removed.
+	requestData := ch.conn.endpoint.requestData(ch.conn.hostname)
+	if requestData == nil {
+		ch.conn.endpoint.onRemoteReject(ch.conn.hostname)
+		return fmt.Errorf("client: remote peer remove us from contacts")
+	}
+	return newClientContactReqChan(ch.conn, requestData)
 }
 
 func (ch *authHSChan) onPacketServer(authPkt *packet.AuthHSPacket) error {
@@ -190,16 +201,7 @@ func (ch *authHSChan) onPacketServer(authPkt *packet.AuthHSPacket) error {
 			ch.conn.getControlChan().isAuthenticated = true
 			ch.conn.getControlChan().isKnownToPeer = true
 			ch.conn.hostname = clientHostname
-			// XXX: Query the endpoint for known status.
-			isKnown = true // XXX: HACKAHACKAHACK
-
-			if isKnown {
-				// Known peer, connection is established.
-				ch.conn.authTimer.Stop()
-			} else {
-				// Give them another interval to request contact.
-				ch.conn.authTimer.Reset(authenticationTimeout)
-			}
+			isKnown = ch.conn.endpoint.isKnown(clientHostname)
 		}
 	} else {
 		err = fmt.Errorf("auth from blacklisted peer: '%v'", clientHostname)
@@ -212,12 +214,13 @@ func (ch *authHSChan) onPacketServer(authPkt *packet.AuthHSPacket) error {
 		return wrErr
 	}
 
-	// XXX: Notify the endpoint that a new inbound connection is available.
 	if sigOk {
 		if isKnown {
-
+			ch.conn.authTimer.Stop()
+			ch.conn.endpoint.onConnectionEstablished(ch.conn)
 		} else {
-
+			// Give them another interval to request contact.
+			ch.conn.authTimer.Reset(authenticationTimeout)
 		}
 	}
 

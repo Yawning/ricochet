@@ -118,8 +118,8 @@ func (ch *contactReqChan) onResponse(resp *packet.ContactRequestResponse) error 
 		log.Printf("client: server '%s' accepted contact request", ch.conn.hostname)
 		ch.conn.getControlChan().isKnownToPeer = true
 		ch.state = chanStateDone
+		ch.conn.endpoint.onConnectionEstablished(ch.conn)
 
-		// XXX: Mark peer online.
 		// XXX: Send a channel close?  This is likewise something the server
 		// ought to be doing, so don't bother for now.  This code will not use
 		// the channel past this point, apart from processing the server's
