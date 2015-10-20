@@ -56,8 +56,18 @@ func (ch *contactReqChan) onOpenChannel() error {
 
 	log.Printf("server: ContactRequest from: '%v' (%s)", ch.conn.hostname, ch.reqData)
 
-	resp := &packet.ContactRequestResponse{
-		Status: packet.ContactRequestResponse_Pending.Enum(),
+	// Check to see if we should mark the contact request as accepted,
+	// rejected or pending.
+	accept, err := ch.conn.endpoint.onContactRequest(ch.conn, ch.reqData)
+	if err != nil {
+		return err
+	}
+
+	resp := &packet.ContactRequestResponse{}
+	if accept {
+		resp.Status = packet.ContactRequestResponse_Accepted.Enum()
+	} else {
+		resp.Status = packet.ContactRequestResponse_Pending.Enum()
 	}
 	chanResult := &packet.ChannelResult{
 		ChannelIdentifier: proto.Int32((int32)(ch.chanID)),
@@ -71,7 +81,14 @@ func (ch *contactReqChan) onOpenChannel() error {
 	if err != nil {
 		return err
 	}
-	return ch.conn.sendPacket(controlChanID, rawPkt)
+	err = ch.conn.sendPacket(controlChanID, rawPkt)
+	if !accept {
+		return err
+	}
+
+	// We immediately accepted the Contact Request.
+	ch.conn.endpoint.onConnectionEstablished(ch.conn)
+	return ch.conn.sendChanClose(ch.chanID)
 }
 
 func (ch *contactReqChan) onChannelResult(msg *packet.ChannelResult) error {

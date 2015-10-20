@@ -102,7 +102,8 @@ type EndpointConfig struct {
 type Endpoint struct {
 	sync.Mutex
 
-	IncomingMsgChan chan *IncomingMessage
+	IncomingMsgChan  chan *IncomingMessage
+	ContactStateChan chan *ContactStateChange
 
 	hostname string
 
@@ -115,9 +116,9 @@ type Endpoint struct {
 	contacts        map[string]*ricochetContact
 	pendingContacts map[string]*ricochetContact
 
-	outgoingQueue        *channels.InfiniteChannel
-	incomingMsgQueue     *channels.InfiniteChannel
-	incomingContactQueue *channels.InfiniteChannel
+	outgoingQueue     *channels.InfiniteChannel
+	incomingMsgQueue  *channels.InfiniteChannel
+	contactStateQueue *channels.InfiniteChannel
 }
 
 type IncomingMessage struct {
@@ -125,9 +126,25 @@ type IncomingMessage struct {
 	Body string
 }
 
+type ContactState int
+
+const (
+	ContactStateOffline ContactState = iota
+	ContactStateRejected
+	ContactStateRemoved
+	ContactStateOnline
+)
+
+type ContactStateChange struct {
+	Hostname string
+	OldState ContactState
+	State    ContactState
+}
+
 type ricochetContact struct {
 	conn        *ricochetConn
 	requestData *ContactRequest
+	state       ContactState
 }
 
 func NewEndpoint(cfg *EndpointConfig) (e *Endpoint, err error) {
@@ -141,10 +158,10 @@ func NewEndpoint(cfg *EndpointConfig) (e *Endpoint, err error) {
 	}
 	e.outgoingQueue = channels.NewInfiniteChannel()
 	e.incomingMsgQueue = channels.NewInfiniteChannel()
-	e.incomingContactQueue = channels.NewInfiniteChannel()
 	e.pendingContacts = make(map[string]*ricochetContact)
 
 	e.IncomingMsgChan = make(chan *IncomingMessage)
+	e.ContactStateChan = make(chan *ContactStateChange)
 
 	e.blacklist = make(map[string]bool)
 	for _, id := range cfg.BlacklistedContacts {
@@ -174,6 +191,7 @@ func NewEndpoint(cfg *EndpointConfig) (e *Endpoint, err error) {
 	go e.hsAcceptWorker()
 	go e.hsConnectWorker()
 	go e.incomingMsgWorker()
+	go e.contactStateWorker()
 
 	return e, nil
 }
@@ -304,8 +322,6 @@ func (e *Endpoint) hsConnectWorker() {
 }
 
 func (e *Endpoint) incomingMsgWorker() {
-	// Abuse a go routine to save the caller from having to include a type
-	// assertion.  Sort of silly, but who cares.
 	msgCh := e.incomingMsgQueue.Out()
 	for {
 		msg, ok := <-msgCh
@@ -313,6 +329,17 @@ func (e *Endpoint) incomingMsgWorker() {
 			break
 		}
 		e.IncomingMsgChan <- msg.(*IncomingMessage)
+	}
+}
+
+func (e *Endpoint) contactStateWorker() {
+	msgCh := e.contactStateQueue.Out()
+	for {
+		msg, ok := <-msgCh
+		if !ok {
+			break
+		}
+		e.ContactStateChan <- msg.(*ContactStateChange)
 	}
 }
 
@@ -382,8 +409,7 @@ func (e *Endpoint) onConnectionEstablished(conn *ricochetConn) {
 	// If we still care about the peer...
 	if contact := e.contacts[conn.hostname]; contact != nil {
 		contact.updateConn(conn)
-
-		// XXX: Notify caller that peer is online.
+		e.onContactStateChange(contact, conn.hostname, ContactStateOnline)
 	} else {
 		// User must have removed it while the connection was in
 		// progress.  Close the connection.
@@ -407,9 +433,7 @@ func (e *Endpoint) onConnectionClosed(conn *ricochetConn) {
 			// The contact no longer has a connection.
 			contact.conn = nil
 
-			// XXX: Notify caller that the peer is offline.
-
-			// Schedule a reconnect.
+			e.onContactStateChange(contact, conn.hostname, ContactStateOffline)
 			e.outgoingQueue.In() <- conn.hostname
 		}
 	} else if contact := e.pendingContacts[conn.hostname]; contact != nil {
@@ -419,6 +443,33 @@ func (e *Endpoint) onConnectionClosed(conn *ricochetConn) {
 			contact.conn = nil
 		}
 	}
+}
+
+func (e *Endpoint) onContactRequest(conn *ricochetConn, requestData *ContactRequest) (bool, error) {
+	e.Lock()
+	defer e.Unlock()
+
+	if e.blacklist[conn.hostname] {
+		return false, fmt.Errorf("peer is blacklisted")
+	}
+	if contact := e.contacts[conn.hostname]; contact != nil {
+		return true, nil
+	}
+	contact := e.pendingContacts[conn.hostname]
+	if contact != nil {
+		if contact.conn != nil {
+			// Hm, they re-establised a new connection and re-sent
+			// the request.  Keep the new connection since they must
+			// have done it for a reason.
+			contact.conn.closeConn()
+		}
+	} else {
+		contact = new(ricochetContact)
+		e.pendingContacts[conn.hostname] = contact
+	}
+	contact.conn = conn
+	contact.requestData = requestData
+	return false, nil
 }
 
 func (e *Endpoint) onRemoteReject(hostname string) {
@@ -432,9 +483,9 @@ func (e *Endpoint) onRemoteReject(hostname string) {
 	}
 	delete(e.contacts, hostname)
 	if contact.requestData == nil {
-		// XXX: Notify caller that peer removed us.
+		e.onContactStateChange(contact, hostname, ContactStateRemoved)
 	} else {
-		// XXX: Notify caller that peer rejected us.
+		e.onContactStateChange(contact, hostname, ContactStateRejected)
 	}
 }
 
@@ -444,6 +495,23 @@ func (e *Endpoint) onMessageReceived(hostname, messageBody string) {
 	msg.Body = messageBody
 
 	e.incomingMsgQueue.In() <- msg
+}
+
+func (e *Endpoint) onContactStateChange(contact *ricochetContact, hostname string, state ContactState) {
+	// Suppress duplicate state change messages.
+	if contact.state == state {
+		return
+	}
+
+	log.Printf("[%v]: onContactStateChange '%v' -> '%v'", hostname, contact.state, state)
+
+	msg := new(ContactStateChange)
+	msg.Hostname = hostname
+	msg.OldState = contact.state
+	msg.State = state
+	contact.state = state
+
+	e.contactStateQueue.In() <- msg
 }
 
 func (e *Endpoint) removeAndCloseConnLocked(hostname string) {
