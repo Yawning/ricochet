@@ -30,6 +30,7 @@ const (
 )
 
 type ContactRequest struct {
+	Hostname   string
 	MyNickname string
 	Message    string
 }
@@ -209,6 +210,7 @@ func newServerContactReqChan(conn *ricochetConn, msg *packet.OpenChannel) (*cont
 		return nil, fmt.Errorf("server: missing ContactRequest extension")
 	}
 	req := ext.(*packet.ContactRequest)
+	ch.reqData.Hostname = conn.hostname
 	ch.reqData.MyNickname = req.GetNickname()
 	if len(ch.reqData.MyNickname) > ContactReqNicknameMaxCharacters {
 		return nil, fmt.Errorf("server: ContactRequest nickname too long")

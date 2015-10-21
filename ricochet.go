@@ -103,8 +103,7 @@ type EndpointConfig struct {
 type Endpoint struct {
 	sync.Mutex
 
-	IncomingMsgChan  chan *IncomingMessage
-	ContactStateChan chan *ContactStateChange
+	EventChan <-chan interface{}
 
 	hostname string
 
@@ -117,9 +116,8 @@ type Endpoint struct {
 	contacts        map[string]*ricochetContact
 	pendingContacts map[string]*ricochetContact
 
-	outgoingQueue     *channels.InfiniteChannel
-	incomingMsgQueue  *channels.InfiniteChannel
-	contactStateQueue *channels.InfiniteChannel
+	outgoingQueue *channels.InfiniteChannel
+	eventQueue    *channels.InfiniteChannel
 }
 
 type IncomingMessage struct {
@@ -158,12 +156,10 @@ func NewEndpoint(cfg *EndpointConfig) (e *Endpoint, err error) {
 		return nil, err
 	}
 	e.outgoingQueue = channels.NewInfiniteChannel()
-	e.incomingMsgQueue = channels.NewInfiniteChannel()
-	e.contactStateQueue = channels.NewInfiniteChannel()
+	e.eventQueue = channels.NewInfiniteChannel()
 	e.pendingContacts = make(map[string]*ricochetContact)
 
-	e.IncomingMsgChan = make(chan *IncomingMessage)
-	e.ContactStateChan = make(chan *ContactStateChange)
+	e.EventChan = e.eventQueue.Out()
 
 	e.blacklist = make(map[string]bool)
 	for _, id := range cfg.BlacklistedContacts {
@@ -192,8 +188,6 @@ func NewEndpoint(cfg *EndpointConfig) (e *Endpoint, err error) {
 
 	go e.hsAcceptWorker()
 	go e.hsConnectWorker()
-	go e.incomingMsgWorker()
-	go e.contactStateWorker()
 
 	return e, nil
 }
@@ -202,6 +196,11 @@ func (e *Endpoint) AddContact(hostname string, requestData *ContactRequest) erro
 	hostname, err := normalizeHostname(hostname)
 	if err != nil {
 		return err
+	}
+	if requestData != nil {
+		// The caller shouldn't set this, and it shouldn't get used.
+		// Set it to something correct just to be sure.
+		requestData.Hostname = hostname
 	}
 
 	e.Lock()
@@ -325,28 +324,6 @@ func (e *Endpoint) hsConnectWorker() {
 			time.AfterFunc(contactRetryDelay, func() { e.outgoingQueue.In() <- hostname })
 			continue
 		}
-	}
-}
-
-func (e *Endpoint) incomingMsgWorker() {
-	msgCh := e.incomingMsgQueue.Out()
-	for {
-		msg, ok := <-msgCh
-		if !ok {
-			break
-		}
-		e.IncomingMsgChan <- msg.(*IncomingMessage)
-	}
-}
-
-func (e *Endpoint) contactStateWorker() {
-	msgCh := e.contactStateQueue.Out()
-	for {
-		msg, ok := <-msgCh
-		if !ok {
-			break
-		}
-		e.ContactStateChan <- msg.(*ContactStateChange)
 	}
 }
 
@@ -476,6 +453,9 @@ func (e *Endpoint) onContactRequest(conn *ricochetConn, requestData *ContactRequ
 	}
 	contact.conn = conn
 	contact.requestData = requestData
+
+	e.eventQueue.In() <- requestData
+
 	return false, nil
 }
 
@@ -501,7 +481,7 @@ func (e *Endpoint) onMessageReceived(hostname, messageBody string) {
 	msg.From = hostname
 	msg.Body = messageBody
 
-	e.incomingMsgQueue.In() <- msg
+	e.eventQueue.In() <- msg
 }
 
 func (e *Endpoint) onContactStateChange(contact *ricochetContact, hostname string, state ContactState) {
@@ -518,7 +498,7 @@ func (e *Endpoint) onContactStateChange(contact *ricochetContact, hostname strin
 	msg.State = state
 	contact.state = state
 
-	e.contactStateQueue.In() <- msg
+	e.eventQueue.In() <- msg
 }
 
 func (e *Endpoint) removeAndCloseConnLocked(hostname string) {
