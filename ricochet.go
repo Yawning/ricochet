@@ -57,7 +57,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"log"
+	"io"
+	"io/ioutil"
+	golog "log"
 	"net"
 	"strings"
 	"sync"
@@ -104,6 +106,8 @@ type EndpointConfig struct {
 	KnownContacts       []string
 	BlacklistedContacts []string
 	PendingContacts     map[string]*ContactRequest
+
+	LogWriter io.Writer
 }
 
 // Endpoint is a active Ricochet client/server instance.
@@ -112,8 +116,8 @@ type Endpoint struct {
 
 	EventChan <-chan interface{}
 
-	hostname string
-
+	log        *golog.Logger
+	hostname   string
 	privateKey *rsa.PrivateKey
 	ctrl       *bulb.Conn
 	isoBase    *proxy.Auth
@@ -196,7 +200,13 @@ func NewEndpoint(cfg *EndpointConfig) (e *Endpoint, err error) {
 		return nil, err
 	}
 
-	log.Printf("server: online as '%v'", e.hostname)
+	logWr := cfg.LogWriter
+	if logWr == nil {
+		logWr = ioutil.Discard
+	}
+	e.log = golog.New(logWr, "", golog.LstdFlags)
+
+	e.log.Printf("server: online as '%v'", e.hostname)
 
 	go e.hsAcceptWorker()
 	go e.hsConnectWorker()
@@ -349,13 +359,13 @@ func (e *Endpoint) hsConnectWorker() {
 func (e *Endpoint) dialClient(hostname string) (*ricochetConn, error) {
 	dialHostname := hostname + onionSuffix
 	dialHostname = fmt.Sprintf("%s:%d", dialHostname, ricochetPort)
-	log.Printf("client: new server connection: '%v'", hostname)
+	e.log.Printf("client: New outgoing connection: '%v'", hostname)
 
 	// Obtain a Tor backed proxy.Dialer with appropriate isolation set.
 	auth := &proxy.Auth{User: e.isoBase.User, Password: hostname}
 	d, err := e.ctrl.Dialer(auth)
 	if err != nil {
-		log.Printf("client: Failed to get outgoing Dialer: %v", err)
+		e.log.Printf("client: Failed to get outgoing Dialer: %v", err)
 		return nil, err
 	}
 
@@ -509,7 +519,7 @@ func (e *Endpoint) onContactStateChange(contact *ricochetContact, hostname strin
 		return
 	}
 
-	log.Printf("[%v]: onContactStateChange '%v' -> '%v'", hostname, contact.state, state)
+	e.log.Printf("[%v]: onContactStateChange '%v' -> '%v'", hostname, contact.state, state)
 
 	msg := new(ContactStateChange)
 	msg.Hostname = hostname
@@ -549,6 +559,7 @@ func (e *Endpoint) removeAndCloseConnLocked(hostname string) {
 
 func (contact *ricochetContact) updateConnLocked(conn *ricochetConn) {
 	// e.Lock() should be held at this point.
+	log := conn.endpoint.log
 
 	// If the connection already is set, do nothing.
 	if contact.conn == conn {

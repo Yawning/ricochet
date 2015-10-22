@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/yawning/ricochet/packet"
@@ -51,6 +50,7 @@ type contactReqChan struct {
 }
 
 func (ch *contactReqChan) onOpenChannel() error {
+	log := ch.conn.endpoint.log
 	ch.state = chanStateOpen
 
 	// Stop the timer since the peer took sufficient action.
@@ -128,6 +128,7 @@ func (ch *contactReqChan) onPacket(rawPkt []byte) error {
 }
 
 func (ch *contactReqChan) onResponse(resp *packet.ContactRequestResponse) error {
+	log := ch.conn.endpoint.log
 	switch resp.GetStatus() {
 	case packet.ContactRequestResponse_Pending:
 		// Nothing to do for this case, further responses to come.

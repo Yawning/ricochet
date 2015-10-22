@@ -12,7 +12,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"net"
 	"sync"
@@ -126,6 +125,7 @@ func (c *ricochetConn) allocateNextChanID() (uint16, error) {
 
 func (c *ricochetConn) clientHandshake(d proxy.Dialer, dialHostname string) {
 	var err error
+	log := c.endpoint.log
 	defer func() {
 		if c.conn != nil {
 			c.conn.Close()
@@ -197,6 +197,7 @@ func (c *ricochetConn) clientHandshake(d proxy.Dialer, dialHostname string) {
 }
 
 func (c *ricochetConn) serverHandshake() {
+	log := c.endpoint.log
 	var err error
 	defer func() {
 		c.conn.Close()
@@ -259,6 +260,7 @@ func (c *ricochetConn) serverHandshake() {
 }
 
 func (c *ricochetConn) incomingPacketWorker() {
+	log := c.endpoint.log
 	for {
 		chanID, rawPkt, err := c.nextPacket()
 		if err == io.EOF {

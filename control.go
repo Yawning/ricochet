@@ -13,8 +13,6 @@ import (
 	"math"
 	"time"
 
-	"log"
-
 	"github.com/golang/protobuf/proto"
 	"github.com/yawning/ricochet/packet"
 )
@@ -107,6 +105,7 @@ func (ch *controlChan) onClose() error {
 }
 
 func (ch *controlChan) onOpenChannelMsg(msg *packet.OpenChannel) error {
+	log := ch.conn.endpoint.log
 	chanType := msg.GetChannelType()
 	rawChanID := msg.GetChannelIdentifier()
 	if rawChanID <= 0 || rawChanID >= math.MaxUint16 {

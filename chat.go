@@ -10,7 +10,6 @@ package ricochet
 import (
 	"errors"
 	"fmt"
-	"log"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/yawning/ricochet/packet"
@@ -63,6 +62,7 @@ func (ch *chatChan) onChannelResult(msg *packet.ChannelResult) error {
 }
 
 func (ch *chatChan) onPacket(rawPkt []byte) (err error) {
+	log := ch.conn.endpoint.log
 	var chatPkt packet.ChatPacket
 	if err = proto.Unmarshal(rawPkt, &chatPkt); err != nil {
 		return

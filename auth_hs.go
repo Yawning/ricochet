@@ -16,8 +16,6 @@ import (
 	"fmt"
 	"io"
 
-	"log"
-
 	"github.com/golang/protobuf/proto"
 	"github.com/yawning/bulb/utils/pkcs1"
 	"github.com/yawning/ricochet/packet"
@@ -119,6 +117,7 @@ func (ch *authHSChan) onPacket(rawPkt []byte) error {
 }
 
 func (ch *authHSChan) onPacketClient(authPkt *packet.AuthHSPacket) error {
+	log := ch.conn.endpoint.log
 	resultMsg := authPkt.GetResult()
 	if resultMsg == nil {
 		return fmt.Errorf("missing result")
@@ -156,6 +155,7 @@ func (ch *authHSChan) onPacketClient(authPkt *packet.AuthHSPacket) error {
 }
 
 func (ch *authHSChan) onPacketServer(authPkt *packet.AuthHSPacket) error {
+	log := ch.conn.endpoint.log
 	proofMsg := authPkt.GetProof()
 	if proofMsg == nil {
 		return fmt.Errorf("missing proof")
