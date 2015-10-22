@@ -545,7 +545,7 @@ func (contact *ricochetContact) updateConnLocked(conn *ricochetConn) {
 	// If the old connection isn't established yet, new one wins.
 	establishedAt := contact.conn.getEstablished()
 	if establishedAt.Equal(time.Time{}) {
-		log.Printf("[%v]: old connection is not established, new wins")
+		log.Printf("[%v]: old connection is not established, new wins", conn.hostname)
 		contact.conn.closeConn()
 		contact.conn = conn
 		return
@@ -559,7 +559,7 @@ func (contact *ricochetContact) updateConnLocked(conn *ricochetConn) {
 	// same peers in the same positions (direction is the same),
 	// favor the new one.
 	if contact.conn.isServer == conn.isServer {
-		log.Printf("[%v]: both connections in same direction, new wins")
+		log.Printf("[%v]: both connections in same direction, new wins", conn.hostname)
 		contact.conn.closeConn()
 		contact.conn = conn
 		return
@@ -568,7 +568,7 @@ func (contact *ricochetContact) updateConnLocked(conn *ricochetConn) {
 	// If the old connection is more than 30 sec old, since when it was
 	// fully established, prefer the new connection.
 	if establishedAt.Add(30 * time.Second).Before(time.Now()) {
-		log.Printf("[%v]: old conn over 30 sec old, new wins")
+		log.Printf("[%v]: old conn over 30 sec old, new wins", conn.hostname)
 		contact.conn.closeConn()
 		contact.conn = conn
 		return
