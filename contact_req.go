@@ -29,6 +29,7 @@ const (
 	ContactReqNicknameMaxCharacters = 30
 )
 
+// ContactRequest is a contact request event.
 type ContactRequest struct {
 	Hostname   string
 	MyNickname string

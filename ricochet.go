@@ -71,6 +71,7 @@ import (
 )
 
 const (
+	// PublicKeyBits is the size of a Ricochet RSA public modulus in bits.
 	PublicKeyBits = 1024
 
 	ricochetPort         = 9878
@@ -85,12 +86,17 @@ const (
 )
 
 var (
+	// ErrAlreadyExists is the error returned when a contact already exists.
 	ErrAlreadyExists = errors.New("contact already exists")
+	// ErrNoSuchContact is the error returned when a contact does not exist.
 	ErrNoSuchContact = errors.New("no such contact")
+	// ErrBlacklisted is the error returned when a contact is blacklisted.
+	ErrBlacklisted = errors.New("contact is blacklisted")
 
 	ricochetHostnameMap map[rune]bool
 )
 
+// EndpointConfig is a Ricochet endpoint configuration.
 type EndpointConfig struct {
 	TorControlPort *bulb.Conn
 	PrivateKey     *rsa.PrivateKey
@@ -100,6 +106,7 @@ type EndpointConfig struct {
 	PendingContacts     map[string]*ContactRequest
 }
 
+// Endpoint is a active Ricochet client/server instance.
 type Endpoint struct {
 	sync.Mutex
 
@@ -120,11 +127,13 @@ type Endpoint struct {
 	eventQueue    *channels.InfiniteChannel
 }
 
+// IncomingMessage is a incoming message event from a peer.
 type IncomingMessage struct {
-	From string
-	Body string
+	From    string
+	Message string
 }
 
+// ContactState is the status for a given peer.
 type ContactState int
 
 const (
@@ -134,6 +143,7 @@ const (
 	ContactStateOnline
 )
 
+// ContactStateChange is a peer status change notification event.
 type ContactStateChange struct {
 	Hostname string
 	OldState ContactState
@@ -146,6 +156,8 @@ type ricochetContact struct {
 	state       ContactState
 }
 
+// NewEndpoint creates a Ricochet client/server endpoint with the provided
+// configuration, including registering the ephemeral HS with Tor.
 func NewEndpoint(cfg *EndpointConfig) (e *Endpoint, err error) {
 	e = new(Endpoint)
 	e.hostname, _ = pkcs1.OnionAddr(&cfg.PrivateKey.PublicKey)
@@ -192,6 +204,8 @@ func NewEndpoint(cfg *EndpointConfig) (e *Endpoint, err error) {
 	return e, nil
 }
 
+// AddContact adds a peer to the contact list.  This routine is also should
+// be used to accept contact requests received from remote peers.
 func (e *Endpoint) AddContact(hostname string, requestData *ContactRequest) error {
 	hostname, err := normalizeHostname(hostname)
 	if err != nil {
@@ -201,6 +215,9 @@ func (e *Endpoint) AddContact(hostname string, requestData *ContactRequest) erro
 		// The caller shouldn't set this, and it shouldn't get used.
 		// Set it to something correct just to be sure.
 		requestData.Hostname = hostname
+	}
+	if e.isBlacklisted(hostname) {
+		return ErrBlacklisted
 	}
 
 	e.Lock()
@@ -238,6 +255,7 @@ func (e *Endpoint) AddContact(hostname string, requestData *ContactRequest) erro
 	return nil
 }
 
+// BlacklistContact adds/removes a given peer to/from the blacklist.
 func (e *Endpoint) BlacklistContact(hostname string, set bool) error {
 	hostname, err := normalizeHostname(hostname)
 	if err != nil {
@@ -255,6 +273,7 @@ func (e *Endpoint) BlacklistContact(hostname string, set bool) error {
 	return nil
 }
 
+// RemoveContact removes a peer from the contact list.
 func (e *Endpoint) RemoveContact(hostname string) error {
 	hostname, err := normalizeHostname(hostname)
 	if err != nil {
@@ -479,7 +498,7 @@ func (e *Endpoint) onRemoteReject(hostname string) {
 func (e *Endpoint) onMessageReceived(hostname, messageBody string) {
 	msg := new(IncomingMessage)
 	msg.From = hostname
-	msg.Body = messageBody
+	msg.Message = messageBody
 
 	e.eventQueue.In() <- msg
 }
